@@ -1,62 +1,95 @@
 # Music Trader
 
-Music Trader is a gamified music prediction market developed by Team OneShot for CEN3031: Introduction to Software Engineering at the University of Florida.
+Music Trader is a gamified music prediction market developed by Team OneShot for UF CEN3031.
 
-Users trade UP and DOWN contracts using virtual currency called Music Notes based on how they predict songs will move on weekly Billboard charts. The application allows users to apply their music knowledge, learn the basics of prediction markets, track their performance, and compete with friends without risking real money.
+Users trade UP and DOWN contracts with virtual currency called Music Notes based on weekly Billboard chart movement. Planned features include user accounts, trading, portfolios, leaderboards, and automated chart-data ingestion.
 
-## Team Members
+## Team
 
-- Luis Andre Blanco — Project Manager, Scrum Master, and Developer
+- Luis Andre Blanco — Scrum Master and Developer
 - Jovon Alexis — Developer
-- Jack Harris — Developer
+- Jack Harris — Project Manager
 - Michael Kroner — Developer
 
-## Planned Features
+## Stack and Structure
 
-- User registration, login, logout, and profiles
-- Trader and administrator user roles
-- Weekly song markets based on Billboard chart movement
-- UP and DOWN song contracts
-- Virtual Music Note balances
-- Buying and selling positions before market resolution
-- Automated trading bots and fallback market-making
-- Active and past position tracking
-- Realized profit-and-loss and win-loss records
-- Weekly, monthly, all-time, and friends-only leaderboards
-- Weekly champions
-- Billboard chart-data ingestion
-- Song information and artwork
+- `frontend/` — Next.js, React, and TypeScript
+- `backend/` — Go REST API
+- `ingestion/` — Python chart-data ingestion
+- `.github/workflows/` — GitHub Actions CI
+- PostgreSQL — planned database
 
-## Technology Stack
+## Setup
 
-### Programming Languages
+Install Git, Node.js 24 with npm, Python 3.13, and the Go version specified in `backend/go.mod`.
 
-- Go for backend services and the trading system
-- Python for Billboard data ingestion, initial market pricing, and potential reinforcement-learning bots
-- TypeScript for frontend development
+```bash
+git clone https://github.com/Mikey1332/SWE_semester_project.git
+cd SWE_semester_project
+```
 
-### Frameworks and Libraries
+Run each section below from the repository root.
 
-- Next.js and React for the web application
-- TradingView Lightweight Charts and Visx or Recharts for data visualization
-- TanStack Query for asynchronous data fetching and caching
-- TanStack Table for data tables
-- Tailwind CSS and shadcn/ui for interface design
+### Frontend
 
-### Data and Infrastructure
+```bash
+cd frontend
+npm ci
+npm run dev
+```
 
-- PostgreSQL for users, songs, chart data, markets, trades, positions, orders, Music Note balances, and leaderboards
-- Redis for caching, live market data, and session storage if needed
-- TigerBeetle for an immutable transaction ledger if needed
-- Billboard charts as the market-resolution source
-- Spotify or Apple Music APIs for song metadata and artwork if needed
+Open http://localhost:3000. Stop with Ctrl+C.
 
-## Development Tools
+Checks from `frontend/`:
 
-- Git and GitHub for version control and configuration management
-- Protected feature-branch and pull-request workflow
-- GitHub Issues and GitHub Projects for project management
+```bash
+npm run lint
+npm run build
+npm test
+```
 
-## Project Status
+### Backend
 
-Planning and development-environment setup.
+```bash
+cd backend
+go mod download
+go vet ./...
+go test ./...
+go run .
+```
+
+Open http://localhost:8080/health; expect `{"status":"ok"}`. Stop with Ctrl+C.
+
+### Python Ingestion
+
+On macOS/Linux:
+
+```bash
+python3.13 -m venv .venv
+source .venv/bin/activate
+python -m pip install flake8 pytest
+python -m pip install -r ingestion/requirements.txt
+python -m pytest ingestion/tests/
+flake8 ingestion/ --select=E9,F63,F7,F82
+```
+
+On Windows, create the environment with `py -3.13 -m venv .venv` and activate it in PowerShell with `.\.venv\Scripts\Activate.ps1`. Then run the same installation and check commands.
+
+Add Python dependencies to `ingestion/requirements.txt`.
+
+## Contributing
+
+1. Create a feature branch from an up-to-date `main`.
+2. Make changes, add relevant tests, and run checks.
+3. Push and open a pull request targeting `main`.
+4. Obtain an approving teammate review and pass required checks before merging.
+
+CI runs frontend lint/build/tests, Go build/vet/tests, and Python lint/tests on pull requests targeting `main` and pushes to `main`.
+
+Commit source, tests, dependency manifests/lockfiles, and configuration. Do not commit virtual environments, installed dependencies, build output, IDE settings, or credentials.
+
+## Status
+
+Initial scaffolding, CI workflows, and basic tests are implemented. Feature development, ingestion execution, and database integration are in progress.
+
+A reported frontend ESLint dependency vulnerability remains under review.

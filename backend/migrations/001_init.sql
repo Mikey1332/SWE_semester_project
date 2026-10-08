@@ -87,7 +87,7 @@ CREATE TABLE balances (
 
 -- Append-only history of every balance change.
 CREATE TABLE ledger_entries (
-    tx_id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_id       bigint NOT NULL REFERENCES users (id),
     amount        bigint NOT NULL CHECK (amount <> 0), -- positive credits, negative debits
     balance_after bigint NOT NULL CHECK (balance_after >= 0),

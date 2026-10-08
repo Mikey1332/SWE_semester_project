@@ -69,7 +69,7 @@ CREATE TABLE trades (
 CREATE INDEX trades_market_idx ON trades (market_id, created_at);
 
 CREATE TABLE positions (
-    user_id    bigint NOT NULL REFER.ENCES users (id),
+    user_id    bigint NOT NULL REFERENCES users (id),
     market_id  bigint NOT NULL REFERENCES markets (id),
     side       text NOT NULL CHECK (side IN ('up', 'down')),
     quantity   integer NOT NULL DEFAULT 0 CHECK (quantity >= 0),

@@ -1,61 +1,72 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
-	"encoding/json"
+
+	firebase "firebase.google.com/go/v4"
+	"firebase.google.com/go/v4/auth"
 )
 
-type SignupRequest struct {
-	Username string `json:"username"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
-func routes() http.Handler {
+func routes(authClient *auth.Client) http.Handler {
 	mux := http.NewServeMux()
-
-	mux.HandleFunc("POST /signup", func(w http.ResponseWriter, r *http.Request) {
-		var req SignupRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if req.Username == "" {
-			http.Error(w, "Username is required", http.StatusBadRequest)
-			return
-		}
-		if req.Email == "" {
-			http.Error(w, "Email is required", http.StatusBadRequest)
-			return
-		}
-		if req.Password == "" {
-			http.Error(w, "Password is required", http.StatusBadRequest)
-			return
-		}
-		if len(req.Password) < 8 || len(req.Password) > 32 {
-			http.Error(w, "Password must be between 8 and 32 bytes", http.StatusBadRequest)
-			return
-		}
-
-		// Process the signup request
-		// For now, we'll just return a success message
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"message":"Signup details received. Account creation is not connected yet."}`))
-	})
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "ok",
+		})
 	})
+
+	mux.HandleFunc("GET /auth/me", func(w http.ResponseWriter, r *http.Request) {
+		// The frontend will send: Authorization: Bearer TOKEN
+		header := r.Header.Get("Authorization")
+
+		if !strings.HasPrefix(header, "Bearer ") {
+			http.Error(w, "Sign-in token is required", http.StatusUnauthorized)
+			return
+		}
+
+		idToken := strings.TrimPrefix(header, "Bearer ")
+
+		token, err := authClient.VerifyIDToken(r.Context(), idToken)
+		if err != nil {
+			http.Error(w, "Invalid or expired sign-in token", http.StatusUnauthorized)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"uid":     token.UID,
+			"message": "Go verified your Firebase sign-in!",
+		})
+	})
+
 	return mux
 }
 
 func main() {
+	ctx := context.Background()
+
+	app, err := firebase.NewApp(ctx, &firebase.Config{
+		ProjectID: "swe-project-auth",
+	})
+	if err != nil {
+		log.Fatalf("Firebase setup failed: %v", err)
+	}
+
+	authClient, err := app.Auth(ctx)
+	if err != nil {
+		log.Fatalf("Firebase authentication setup failed: %v", err)
+	}
+
 	server := &http.Server{
 		Addr:              ":8080",
-		Handler:           routes(),
+		Handler:           routes(authClient),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

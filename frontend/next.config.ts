@@ -12,12 +12,12 @@ const nextConfig: NextConfig = {
     },
   },
   async rewrites() {
-    return [
-      {
-        source: "/api/signup",
-        destination: "http://localhost:8080/signup",
-      },
-    ];
+  return [
+    {
+      source: "/api/auth/me",
+      destination: "http://localhost:8080/auth/me",
+    },
+  ];
   },
 };
 

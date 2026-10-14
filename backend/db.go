@@ -104,8 +104,8 @@ func Post(ctx context.Context, tx *sql.Tx, e Entry) (int64, error) {
 	return balance, err
 }
 
-// Buy sells quantity YES or NO contracts in an open market to the user at the
-// bot's price, returning the new balance.
+// Buy sells quantity YES or NO contracts to the user at the bot's price,
+// returning the new balance. The market must be open and before closes_at.
 func Buy(ctx context.Context, db *sql.DB, userID, marketID int64, side string, quantity int64) (int64, error) {
 	if side != "yes" && side != "no" {
 		return 0, ErrInvalidOrder
@@ -122,10 +122,11 @@ func Buy(ctx context.Context, db *sql.DB, userID, marketID int64, side string, q
 
 	// FOR SHARE makes Resolve wait for in-flight buys, and buys wait for Resolve.
 	var price int64
-	var status string
+	var open bool
 	err = tx.QueryRowContext(ctx,
-		`SELECT yes_price, status FROM markets WHERE id = $1 FOR SHARE`, marketID).Scan(&price, &status)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && status != "open") {
+		`SELECT yes_price, status = 'open' AND now() < closes_at FROM markets WHERE id = $1 FOR SHARE`,
+		marketID).Scan(&price, &open)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !open) {
 		return 0, ErrMarketClosed
 	}
 	if err != nil {

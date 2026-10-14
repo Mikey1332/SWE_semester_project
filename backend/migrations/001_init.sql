@@ -31,7 +31,8 @@ CREATE TABLE chart_snapshots (
 -- `shift` spots from baseline_rank on the chart dated chart_date?" Positive shift
 -- means rising (rank number falls), negative means falling. A song missing from
 -- that chart counts as rank 101. YES costs yes_price, NO costs 100 - yes_price,
--- and each winning contract pays 100 (ContractPayout in db.go).
+-- and each winning contract pays 100 (ContractPayout in db.go). Trading stops
+-- at closes_at, before the chart is published.
 CREATE TABLE markets (
     id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     song_id       bigint NOT NULL REFERENCES songs (id),
@@ -39,7 +40,8 @@ CREATE TABLE markets (
     baseline_rank smallint NOT NULL CHECK (baseline_rank BETWEEN 1 AND 100),
     shift         smallint NOT NULL CHECK (shift <> 0),
     yes_price     smallint NOT NULL CHECK (yes_price BETWEEN 1 AND 99),
-    status        text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed', 'resolved')),
+    closes_at     timestamptz NOT NULL,
+    status        text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
     outcome       text CHECK (outcome IN ('yes', 'no')),
     created_at    timestamptz NOT NULL DEFAULT now(),
     UNIQUE (song_id, chart_date, shift),

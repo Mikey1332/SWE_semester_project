@@ -198,17 +198,31 @@ func TestConcurrentDebits(t *testing.T) {
 	}
 }
 
-// newMarket creates a song and an open market on a chart date no other test run
-// uses, so chart_snapshots rows from earlier runs never collide or leak in.
+// uniqueDate returns a far-future chart date no other test run uses, so
+// chart_snapshots rows from earlier runs never collide or leak in.
+func uniqueDate() time.Time {
+	offset := int(time.Now().UnixNano() / 1_000 % 1_000_000)
+	return time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, offset)
+}
+
+func newSong(t *testing.T, db *sql.DB) int64 {
+	t.Helper()
+	var id int64
+	if err := db.QueryRow(`INSERT INTO songs (title, artist) VALUES ($1, 'Test Artist') RETURNING id`,
+		unique("song")).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// newMarket creates a song and a market on a unique chart date that is open for a day.
 func newMarket(t *testing.T, db *sql.DB, baseline, shift, yesPrice int) (marketID, songID int64, chartDate string) {
 	t.Helper()
-	offset := int(time.Now().UnixNano() / 1_000 % 1_000_000)
-	chartDate = time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, offset).Format(time.DateOnly)
+	songID, chartDate = newSong(t, db), uniqueDate().Format(time.DateOnly)
 	err := db.QueryRow(`
-		WITH s AS (INSERT INTO songs (title, artist) VALUES ($1, 'Test Artist') RETURNING id)
-		INSERT INTO markets (song_id, chart_date, baseline_rank, shift, yes_price)
-		SELECT id, $2, $3, $4, $5 FROM s RETURNING id, song_id`,
-		unique("song"), chartDate, baseline, shift, yesPrice).Scan(&marketID, &songID)
+		INSERT INTO markets (song_id, chart_date, baseline_rank, shift, yes_price, closes_at)
+		VALUES ($1, $2, $3, $4, $5, now() + interval '1 day') RETURNING id`,
+		songID, chartDate, baseline, shift, yesPrice).Scan(&marketID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +271,7 @@ func TestBuyAndResolve(t *testing.T) {
 	}
 
 	addRank(t, db, songID, chartDate, 44) // rose 6 spots
-	for range 2 { // second Resolve must not pay twice
+	for range 2 {                         // second Resolve must not pay twice
 		if err := Resolve(ctx, db, marketID); err != nil {
 			t.Fatal(err)
 		}
@@ -300,6 +314,10 @@ func TestBuyRejects(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
 	marketID, _, _ := newMarket(t, db, 50, 5, 99)
+	pastClose, _, _ := newMarket(t, db, 50, 5, 50)
+	if _, err := db.Exec(`UPDATE markets SET closes_at = now() - interval '1 second' WHERE id = $1`, pastClose); err != nil {
+		t.Fatal(err)
+	}
 	id := newUser(t, db)
 
 	for _, c := range []struct {
@@ -313,6 +331,7 @@ func TestBuyRejects(t *testing.T) {
 		{marketID, "yes", -1, ErrInvalidOrder}, // would otherwise credit notes
 		{marketID, "yes", 1_000_001, ErrInvalidOrder},
 		{0, "yes", 1, ErrMarketClosed},
+		{pastClose, "yes", 1, ErrMarketClosed},       // trading stopped before the chart came out
 		{marketID, "yes", 102, ErrInsufficientFunds}, // 102 x 99 = 10,098
 	} {
 		if _, err := Buy(ctx, db, id, c.market, c.side, c.quantity); !errors.Is(err, c.want) {
@@ -320,4 +339,32 @@ func TestBuyRejects(t *testing.T) {
 		}
 	}
 	checkUser(t, db, id, StartingBalance, 0)
+}
+
+func TestBuyEndpoint(t *testing.T) {
+	db := testDB(t)
+	marketID, _, _ := newMarket(t, db, 50, 5, 62)
+	id := newUser(t, db)
+
+	anonymous := currentUser
+	currentUser = func(*http.Request) (int64, bool) { return id, true } // stand-in for auth
+	t.Cleanup(func() { currentUser = anonymous })
+
+	for _, c := range []struct {
+		body, want string
+		code       int
+	}{
+		{`{"side":"yes","quantity":2}`, `{"balance":9876}`, http.StatusOK}, // 2 x 62
+		{`{"side":"yes","quantity":0}`, "", http.StatusBadRequest},
+		{`not json`, "", http.StatusBadRequest},
+		{`{"side":"no","quantity":1000}`, "", http.StatusConflict}, // 1000 x 38 > balance
+	} {
+		res := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/markets/%d/buy", marketID), strings.NewReader(c.body))
+		routes(db).ServeHTTP(res, req)
+		if res.Code != c.code || (c.want != "" && strings.TrimSpace(res.Body.String()) != c.want) {
+			t.Fatalf("POST %s: %d %s, want %d %s", c.body, res.Code, res.Body, c.code, c.want)
+		}
+	}
+	checkUser(t, db, id, 9_876, 0)
 }

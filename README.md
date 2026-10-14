@@ -105,7 +105,10 @@ Initial scaffolding, CI workflows, basic tests, the PostgreSQL schema, and the M
 
 - New users receive a 10,000 Music Note `grant` (`CreateUser` in `backend/db.go`).
 - Every balance change goes through `Post`, which updates `balances` and appends to `ledger_entries` in the caller's transaction, and rejects overdrafts.
-- The `user_pnl` view reports realized P&L, excluding grants.
+- Markets are Kalshi-style YES/NO questions created by the bots: "Will this song move at least `shift` spots from `baseline_rank` on the chart dated `chart_date`?" The bot sets `yes_price` (1–99); NO costs `100 - yes_price`.
+- `Buy` sells contracts from the house at that price. Users hold them until `Resolve` reads the chart, pays 100 notes per winning contract, and closes every position in the market. A song missing from an ingested chart counts as rank 101.
+- The `user_pnl` view reports realized P&L, excluding grants; money in open positions is not counted as a loss until the market resolves.
+- `GET /users/{id}/balance` returns `{"balance": ..., "realized_pnl": ...}`.
 - Add schema changes as new numbered files in `backend/migrations/`; never edit an applied migration.
 
 A reported frontend ESLint dependency vulnerability remains under review.

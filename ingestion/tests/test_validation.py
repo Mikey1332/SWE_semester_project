@@ -152,3 +152,72 @@ def test_snapshot_with_duplicate_ranks():
         error_found = True
 
     assert error_found is True
+
+def test_snapshot_with_too_few_songs():
+    snapshot = make_snapshot()
+    snapshot["songs"].pop()
+
+    error_found = False
+
+    try:
+        validate_snapshot(snapshot)
+    except ValueError:
+        error_found = True
+
+    assert error_found is True
+
+
+def test_snapshot_with_invalid_song():
+    snapshot = make_snapshot()
+    snapshot["songs"][0]["title"] = ""
+
+    error_found = False
+
+    try:
+        validate_snapshot(snapshot)
+    except ValueError:
+        error_found = True
+
+    assert error_found is True
+
+
+def test_snapshot_with_duplicate_songs():
+    snapshot = make_snapshot()
+    snapshot["songs"][1]["title"] = "Song 1"
+
+    error_found = False
+
+    try:
+        validate_snapshot(snapshot)
+    except ValueError:
+        error_found = True
+
+    assert error_found is True
+
+
+def test_snapshot_with_missing_date():
+    snapshot = make_snapshot()
+    del snapshot["chart_date"]
+
+    error_found = False
+
+    try:
+        validate_snapshot(snapshot)
+    except ValueError:
+        error_found = True
+
+    assert error_found is True
+
+
+def test_snapshot_with_wrong_date_format():
+    snapshot = make_snapshot()
+    snapshot["chart_date"] = "10/17/2026"
+
+    error_found = False
+
+    try:
+        validate_snapshot(snapshot)
+    except ValueError:
+        error_found = True
+
+    assert error_found is True

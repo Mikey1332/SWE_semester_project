@@ -41,7 +41,7 @@ func suggest(ranks []int) (shift, yesPrice int) {
 	if len(moves) > 0 && moves[len(moves)-1] > 0 && current > 1 {
 		shift = min(shift, current-1) // can't rise above #1
 	} else {
-		shift = -min(shift, 101-current) // dropping off the chart counts as #101
+		shift = -min(shift, ChartSize+1-current) // dropping off the chart counts as #101
 	}
 
 	hits := 0
@@ -125,7 +125,7 @@ func botTick(ctx context.Context, db *sql.DB) error {
 	rows, err := db.QueryContext(ctx, `
 		SELECT id FROM markets m
 		WHERE status = 'open'
-		  AND EXISTS (SELECT 1 FROM chart_snapshots c WHERE c.chart_date = m.chart_date)`)
+		  AND (SELECT count(*) FROM chart_snapshots c WHERE c.chart_date = m.chart_date) >= $1`, ChartSize)
 	if err != nil {
 		return err
 	}
@@ -154,7 +154,10 @@ func botTick(ctx context.Context, db *sql.DB) error {
 	}
 
 	var latest sql.NullString
-	if err := db.QueryRowContext(ctx, `SELECT max(chart_date)::text FROM chart_snapshots`).Scan(&latest); err != nil {
+	if err := db.QueryRowContext(ctx, `
+		SELECT max(chart_date)::text FROM (
+			SELECT chart_date FROM chart_snapshots GROUP BY chart_date HAVING count(*) >= $1
+		) complete`, ChartSize).Scan(&latest); err != nil {
 		return errors.Join(append(errs, err)...)
 	}
 	if latest.Valid {

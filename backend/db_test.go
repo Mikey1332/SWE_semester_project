@@ -237,6 +237,25 @@ func addRank(t *testing.T, db *sql.DB, songID int64, chartDate string, rank int)
 	}
 }
 
+// fillChart puts a new filler song on every rank still empty on chartDate, so
+// the chart counts as fully ingested.
+func fillChart(t *testing.T, db *sql.DB, chartDate string) {
+	t.Helper()
+	_, err := db.Exec(`
+		WITH free AS (
+			SELECT g AS rank FROM generate_series(1, $3::int) g
+			WHERE g NOT IN (SELECT rank FROM chart_snapshots WHERE chart_date = $1)
+		), filler AS (
+			INSERT INTO songs (title, artist) SELECT $2 || rank, 'Filler' FROM free RETURNING id, title
+		)
+		INSERT INTO chart_snapshots (song_id, chart_date, rank)
+		SELECT id, $1, substr(title, length($2) + 1)::int FROM filler`,
+		chartDate, unique("filler"), ChartSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func checkUser(t *testing.T, db *sql.DB, userID, wantBalance, wantPnL int64) {
 	t.Helper()
 	var balance, pnl int64
@@ -271,7 +290,12 @@ func TestBuyAndResolve(t *testing.T) {
 	}
 
 	addRank(t, db, songID, chartDate, 44) // rose 6 spots
-	for range 2 {                         // second Resolve must not pay twice
+	if err := Resolve(ctx, db, marketID); !errors.Is(err, ErrChartNotIn) {
+		t.Fatalf("resolve on a half-loaded chart: got %v, want ErrChartNotIn", err)
+	}
+
+	fillChart(t, db, chartDate)
+	for range 2 { // second Resolve must not pay twice
 		if err := Resolve(ctx, db, marketID); err != nil {
 			t.Fatal(err)
 		}
@@ -301,8 +325,7 @@ func TestResolveOffChart(t *testing.T) {
 	if _, err := Buy(ctx, db, id, marketID, "yes", 5); err != nil { // 5 x 30
 		t.Fatal(err)
 	}
-	_, otherSong, _ := newMarket(t, db, 1, 1, 50)
-	addRank(t, db, otherSong, chartDate, 1) // chart is in, our song is not on it
+	fillChart(t, db, chartDate) // full chart without our song on it
 
 	if err := Resolve(ctx, db, marketID); err != nil {
 		t.Fatal(err)

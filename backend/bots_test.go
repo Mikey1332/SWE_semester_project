@@ -90,6 +90,18 @@ func TestBotsOpenAndResolve(t *testing.T) {
 	if err := botTick(ctx, db); err != nil {
 		t.Fatal(err)
 	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM markets WHERE id = $1`, markets[riser].id).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "open" {
+		t.Fatalf("market settled on a half-loaded chart (status %q)", status)
+	}
+
+	fillChart(t, db, week(3))
+	if err := botTick(ctx, db); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, song := range []int64{riser, debut} {
 		var outcome string

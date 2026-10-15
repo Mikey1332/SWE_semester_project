@@ -14,13 +14,14 @@ import (
 const (
 	StartingBalance = 10_000
 	ContractPayout  = 100 // Music Notes paid per winning contract
+	ChartSize       = 100 // Billboard Hot 100; a chart with fewer rows is still loading
 )
 
 var (
 	ErrInsufficientFunds = errors.New("insufficient Music Notes")
 	ErrInvalidOrder      = errors.New("side must be yes or no and quantity between 1 and 1,000,000")
 	ErrMarketClosed      = errors.New("market is not open")
-	ErrChartNotIn        = errors.New("chart for this market has not been ingested")
+	ErrChartNotIn        = errors.New("chart for this market has not been fully ingested")
 )
 
 //go:embed migrations/*.sql
@@ -156,7 +157,8 @@ func Buy(ctx context.Context, db *sql.DB, userID, marketID int64, side string, q
 
 // Resolve settles a market from its chart: winning contracts pay ContractPayout
 // each and every position in the market is closed. Resolving twice is a no-op.
-// ponytail: nothing calls this yet; trigger it after ingestion loads each chart.
+// The chart must be fully loaded (ChartSize rows), so a half-ingested chart
+// never counts songs that are still loading as dropped off.
 func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -176,19 +178,20 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 		return nil
 	}
 
+	var loaded int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT count(*) FROM chart_snapshots WHERE chart_date = $1`, chartDate).Scan(&loaded); err != nil {
+		return err
+	}
+	if loaded < ChartSize {
+		return ErrChartNotIn
+	}
+
 	var rank int64
 	err = tx.QueryRowContext(ctx,
 		`SELECT rank FROM chart_snapshots WHERE song_id = $1 AND chart_date = $2`, songID, chartDate).Scan(&rank)
 	if errors.Is(err, sql.ErrNoRows) {
-		var chartIn bool
-		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM chart_snapshots WHERE chart_date = $1)`, chartDate).Scan(&chartIn); err != nil {
-			return err
-		}
-		if !chartIn {
-			return ErrChartNotIn
-		}
-		rank = 101 // dropped off the chart
+		rank = ChartSize + 1 // dropped off the chart
 	} else if err != nil {
 		return err
 	}

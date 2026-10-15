@@ -1,6 +1,6 @@
-from ingestion.validation import validate_song
+from ingestion.validation import validate_song, validate_snapshot
 
-
+#Song Tests
 def test_song_is_valid():
     # Set up the input
     song = {"title": "song", "artist": "artist", "rank": 1 }
@@ -105,3 +105,50 @@ def test_list_input_is_invalid():
 def test_unicode_title_and_artist_are_valid():
     song = {"title": "Déjà Vu", "artist": "Beyoncé", "rank": 2}
     assert validate_song(song) is True
+
+#Snapshot Tests
+#Make sample data
+def make_snapshot():
+    songs = []
+
+    for rank in range(1, 101):
+        song = {"title": "Song " + str(rank),"artist": "Artist","rank": rank}
+        songs.append(song)
+
+    snapshot = {"chart_name": "hot-100","chart_date": "2026-10-17","songs": songs}
+    return snapshot
+
+
+def test_valid_snapshot():
+    snapshot = make_snapshot()
+
+    # The test fails automatically if this raises an error
+    validate_snapshot(snapshot)
+
+
+def test_snapshot_with_invalid_date():
+    snapshot = make_snapshot()
+    snapshot["chart_date"] = "2026-02-30"
+
+    error_found = False
+
+    try:
+        validate_snapshot(snapshot)
+    except ValueError:
+        error_found = True
+
+    assert error_found is True
+
+
+def test_snapshot_with_duplicate_ranks():
+    snapshot = make_snapshot()
+    snapshot["songs"][1]["rank"] = 1
+
+    error_found = False
+
+    try:
+        validate_snapshot(snapshot)
+    except ValueError:
+        error_found = True
+
+    assert error_found is True

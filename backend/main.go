@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -62,6 +64,19 @@ func main() {
 	authClient, err := app.Auth(ctx)
 	if err != nil {
 		log.Fatalf("Firebase authentication setup failed: %v", err)
+	}
+
+	if url := os.Getenv("DATABASE_URL"); url != "" {
+		db, err := sql.Open("pgx", url)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := Migrate(context.Background(), db); err != nil {
+			log.Fatalf("migrate: %v", err)
+		}
+		log.Println("Database migrated")
+	} else {
+		log.Println("DATABASE_URL not set; skipping database")
 	}
 
 	server := &http.Server{

@@ -21,7 +21,7 @@ Users trade UP and DOWN contracts with virtual currency called Music Notes based
 
 ## Setup
 
-Install Git, Node.js 24 with npm, Python 3.13, and the Go version specified in `backend/go.mod`.
+Install Git, Node.js 24 with npm, Python 3.13, the Go version specified in `backend/go.mod`, and Docker (for PostgreSQL).
 
 ```bash
 git clone https://github.com/Mikey1332/SWE_semester_project.git
@@ -49,6 +49,15 @@ npm test
 ```
 
 ### Backend
+
+Start PostgreSQL and point the backend at it. Migrations run automatically on startup. Without `DATABASE_URL` the server still starts, and the database tests are skipped.
+
+```bash
+docker run -d --name music-trader-db -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+export DATABASE_URL="postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+```
+
+In PowerShell, set the variable with `$env:DATABASE_URL = "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"`.
 
 ```bash
 cd backend
@@ -90,6 +99,13 @@ Commit source, tests, dependency manifests/lockfiles, and configuration. Do not 
 
 ## Status
 
-Initial scaffolding, CI workflows, and basic tests are implemented. Feature development, ingestion execution, and database integration are in progress.
+Initial scaffolding, CI workflows, basic tests, the PostgreSQL schema, and the Music Note ledger are implemented. Feature development and ingestion execution are in progress.
+
+### Music Note ledger
+
+- New users receive a 10,000 Music Note `grant` (`CreateUser` in `backend/db.go`).
+- Every balance change goes through `Post`, which updates `balances` and appends to `ledger_entries` in the caller's transaction, and rejects overdrafts.
+- The `user_pnl` view reports realized P&L, excluding grants.
+- Add schema changes as new numbered files in `backend/migrations/`; never edit an applied migration.
 
 A reported frontend ESLint dependency vulnerability remains under review.

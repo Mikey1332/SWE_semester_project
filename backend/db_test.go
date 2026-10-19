@@ -107,7 +107,7 @@ func TestLedger(t *testing.T) {
 	check(8_000, -2_500)
 
 	res := httptest.NewRecorder()
-	routes(db).ServeHTTP(res, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/users/%d/balance", id), nil))
+	routes(db, nil).ServeHTTP(res, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/users/%d/balance", id), nil))
 	if want := `{"balance":8000,"realized_pnl":-2500}`; strings.TrimSpace(res.Body.String()) != want {
 		t.Fatalf("GET balance: %d %s, want %s", res.Code, res.Body, want)
 	}
@@ -117,7 +117,7 @@ func TestLedger(t *testing.T) {
 		"/users/abc/balance": http.StatusBadRequest,
 	} {
 		res = httptest.NewRecorder()
-		routes(db).ServeHTTP(res, httptest.NewRequest(http.MethodGet, path, nil))
+		routes(db, nil).ServeHTTP(res, httptest.NewRequest(http.MethodGet, path, nil))
 		if res.Code != want {
 			t.Fatalf("GET %s: got %d, want %d", path, res.Code, want)
 		}
@@ -270,6 +270,47 @@ func checkUser(t *testing.T, db *sql.DB, userID, wantBalance, wantPnL int64) {
 	}
 }
 
+// Buying 2,500 notes of contracts debits the balance once and records the
+// purchase in the ledger.
+func TestBuy2500RecordedInLedger(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	marketID, _, _ := newMarket(t, db, 50, 5, 50) // YES costs 50
+	id := newUser(t, db)
+
+	balance, err := Buy(ctx, db, id, marketID, "yes", 50) // 50 x 50 = 2,500
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balance != 7_500 {
+		t.Fatalf("balance after buy = %d, want 7500", balance)
+	}
+
+	var entries, amount, after, market int64
+	var kind string
+	err = db.QueryRow(`
+		SELECT count(*), min(amount), min(balance_after), min(kind), min(market_id)
+		FROM ledger_entries WHERE user_id = $1 AND kind <> 'grant'`, id).
+		Scan(&entries, &amount, &after, &kind, &market)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries != 1 || amount != -2_500 || after != 7_500 || kind != "buy" || market != marketID {
+		t.Fatalf("ledger: entries=%d amount=%d balance_after=%d kind=%q market=%d, want 1 -2500 7500 buy %d",
+			entries, amount, after, kind, market, marketID)
+	}
+
+	var quantity, cost int64
+	if err := db.QueryRow(`SELECT quantity, cost_basis FROM positions WHERE user_id = $1 AND market_id = $2`,
+		id, marketID).Scan(&quantity, &cost); err != nil {
+		t.Fatal(err)
+	}
+	if quantity != 50 || cost != 2_500 {
+		t.Fatalf("position: quantity=%d cost_basis=%d, want 50 and 2500", quantity, cost)
+	}
+	checkUser(t, db, id, 7_500, 0) // not a loss until the market resolves
+}
+
 func TestBuyAndResolve(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
@@ -384,7 +425,7 @@ func TestBuyEndpoint(t *testing.T) {
 	} {
 		res := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/markets/%d/buy", marketID), strings.NewReader(c.body))
-		routes(db).ServeHTTP(res, req)
+		routes(db, nil).ServeHTTP(res, req)
 		if res.Code != c.code || (c.want != "" && strings.TrimSpace(res.Body.String()) != c.want) {
 			t.Fatalf("POST %s: %d %s, want %d %s", c.body, res.Code, res.Body, c.code, c.want)
 		}

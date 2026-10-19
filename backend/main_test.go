@@ -12,7 +12,7 @@ func TestHealth(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/health", nil)
 	response := httptest.NewRecorder()
 
-	routes(nil).ServeHTTP(response, request)
+	routes(nil, nil).ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", response.Code)
@@ -40,7 +40,7 @@ func TestBuyRequiresLogin(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/markets/1/buy", strings.NewReader(`{"side":"yes","quantity":1}`))
 
-	routes(nil).ServeHTTP(response, request)
+	routes(nil, nil).ServeHTTP(response, request)
 
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status 401, got %d", response.Code)

@@ -1,148 +1,57 @@
 "use client";
-
-import {
-  createUserWithEmailAndPassword,
-  updateProfile,
-  type User,
-} from "firebase/auth";
-import { auth } from "./firebase";
-import Image from "next/image";
 import { useState } from "react";
-
-async function verifyWithBackend(user: User): Promise<void> {
-  const idToken = await user.getIdToken();
-
-  const response = await fetch("/api/auth/me", {
-    headers: {
-      Authorization: `Bearer ${idToken}`,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `Firebase signed you in, but backend verification failed (${response.status}).`,
-    );
-  }
+import Image from "next/image";
+import { AuthDialog, useOctaveUser } from "./auth-dialog";
+import { markets, type Market } from "./markets";
+type Side = "up" | "down";
+function Icon({ name, size = 20 }: {
+    name: "search" | "arrow" | "music" | "chart" | "clock" | "star";
+    size?: number;
+}) {
+    const paths = { search: <><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></>, arrow: <><path d="M4 17 17 4M5 4h12v12"/></>, music: <><path d="M9 18V5l11-2v13M9 8l11-2"/><ellipse cx="5.5" cy="18" rx="3.5" ry="3"/><ellipse cx="16.5" cy="16" rx="3.5" ry="3"/></>, chart: <><path d="M4 4v16h17M7 14l4-5 4 3 6-7"/></>, clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></>, star: <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/> };
+    return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
-
+function Artwork({ market, large = false }: {
+    market: Market;
+    large?: boolean;
+}) {
+    return <div className={`artwork ${market.color} ${large ? "large" : ""}`} aria-label={`${market.artist} illustrated record artwork`}><span className="art-lines"/><span className="art-monogram">{market.monogram}</span><span className="art-record"/><span className="art-name">{market.artist}</span></div>;
+}
+function Sparkline({ down = false }: {
+    down?: boolean;
+}) {
+    return <svg className={`sparkline ${down ? "negative" : ""}`} viewBox="0 0 110 34" fill="none" aria-hidden="true"><path d={down ? "M1 6 9 10 18 7 26 18 34 15 42 17 50 12 59 22 67 18 76 25 84 21 95 28 109 27" : "M1 29 10 26 17 29 25 20 33 23 41 17 50 21 58 13 68 16 76 8 86 13 95 6 109 3"} stroke="currentColor" strokeWidth="2"/></svg>;
+}
 export default function Home() {
-  const [busy, setBusy] = useState(false);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("");
-  const [username, setUsername] = useState("");
-
-  return (
-    <main className="w-full max-w-md mx-auto px-6 py-16">
-      <Image
-        src="/octave-white.png"
-        alt="Octave logo"
-        width={2170}
-        height={725}
-        className="w-56 h-auto mb-8"
-      />
-
-      <h1 className="text-3xl font-semibold tracking-tight mb-3">
-        Create an account
-      </h1>
-
-      <p className="text-base text-neutral-400 mb-8">
-        Join Octave to start trading music.
-      </p>
-
-      <form
-        onSubmit={async (event) => {
-          event.preventDefault();
-          if (busy) return;
-
-          if (username.trim() === "") {
-            setMessage("Please enter a username.");
-            return;
-          }
-
-          setBusy(true);
-          setMessage("Creating account...");
-
-          try {
-            const result = await createUserWithEmailAndPassword(
-              auth,
-              email,
-              password
-            );
-
-            await updateProfile(result.user, {
-              displayName: username.trim(),
-            });
-
-            await verifyWithBackend(result.user);
-            setMessage("Account created successfully!");
-          } catch (error) {
-            if (error instanceof Error) {
-              setMessage(error.message);
-            } else {
-              setMessage("Could not complete signup.");
-            }
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        <label htmlFor="username" className="block mb-2">
-          Username
-        </label>
-        <input
-          id="username"
-          name="username"
-          type="text"
-          value={username}
-          onChange={(event) => setUsername(event.target.value)}
-          required
-          autoComplete="username"
-          className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-4 py-3 mb-5"
-        />
-
-        <label htmlFor="email" className="block mb-2">
-          Email
-        </label>
-        <input
-          id="email"
-          name="email"
-          type="email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          required
-          autoComplete="email"
-          className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-4 py-3 mb-5"
-        />
-
-        <label htmlFor="password" className="block mb-2">
-          Password
-        </label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          minLength={8}
-          maxLength={32}
-          required
-          autoComplete="new-password"
-          className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-4 py-3 mb-5"
-        />
-
-        <button
-          type="submit"
-          className="w-full bg-white text-black font-semibold rounded-lg py-3 mt-2 hover:bg-neutral-200"
-          disabled={busy}
-        >
-          Create account
-        </button>
-
-        <p role="status" className="mt-4 text-sm text-neutral-400">
-          {message}
-        </p>
-      </form>
-    </main>
-  );
+    const [authMode, setAuthMode] = useState<"signup" | "login" | null>(null);
+    const { user, logout } = useOctaveUser();
+    const [selected, setSelected] = useState<Market | null>(null);
+    const [side, setSide] = useState<Side>("up");
+    const [search, setSearch] = useState("");
+    const [filter, setFilter] = useState("All markets");
+    const [sort, setSort] = useState("Trending");
+    const [saved, setSaved] = useState<number[]>([]);
+    const [amount, setAmount] = useState("100");
+    const [period, setPeriod] = useState("1W");
+    const [info, setInfo] = useState(false);
+    const [watchlist, setWatchlist] = useState(false);
+    const [orderMessage, setOrderMessage] = useState("");
+    const openMarket = (market: Market, choice: Side = "up") => { setInfo(false); setSelected(market); setSide(choice); setOrderMessage(""); };
+    const visible = markets.filter(m => `${m.song} ${m.artist}`.toLowerCase().includes(search.toLowerCase()) && (!watchlist || saved.includes(m.id)) && (filter === "All markets" || (filter === "Watchlist" ? saved.includes(m.id) : filter === "Rising" ? m.change > 0 : filter === "Falling" ? m.change < 0 : m.category === filter))).sort((a, b) => sort === "Highest chance" ? b.chance - a.chance : sort === "Most active" ? Number(b.volume.replaceAll(",", "")) - Number(a.volume.replaceAll(",", "")) : a.id - b.id);
+    return <div className="app-shell">
+    <header className="header"><button className="brand" onClick={() => { setSelected(null); setInfo(false); setWatchlist(false); setFilter("All markets"); }} aria-label="Octave home"><Image src="/octave-notes.svg" alt="Octave" width={812} height={256} className="brand-logo" priority /></button><nav aria-label="Main navigation"><button className={!info && !watchlist ? "nav-active" : ""} onClick={() => { setSelected(null); setInfo(false); setWatchlist(false); setFilter("All markets"); }}>Discover</button><button className={!info && watchlist ? "nav-active" : ""} onClick={() => { setSelected(null); setInfo(false); setWatchlist(true); setFilter("All markets"); setSearch(""); }}>Watchlist <span className="nav-count">{saved.length}</span></button><button onClick={() => setInfo(true)}>How it works <span>↗</span></button></nav><div className="account-actions">{user ? <><span className="user-name">{user.displayName || user.email}</span><button className="login" onClick={() => void logout()}>Log out</button></> : <><button className="login" onClick={() => setAuthMode("login")}>Log in</button><button className="primary small" onClick={() => setAuthMode("signup")}>Get started <span>↗</span></button></>}</div></header>
+    <div className="ticker"><span className="ticker-label"><span className="live-dot"/> ON THE RADAR</span>{markets.slice(0, 4).map(m => <button key={m.id} onClick={() => openMarket(m)}>{m.song} <span className={m.change > 0 ? "positive" : "negative"}>{m.change > 0 ? "↗" : "↘"} {m.chance}%</span></button>)}<span className="ticker-end">BILLBOARD HOT 100</span></div>
+    <main>
+      {info ? <section className="how-panel"><span className="eyebrow">A LITTLE MUSIC. A LITTLE INSTINCT.</span><h1>Your taste. Your edge.</h1><p>Predict what happens next on the Billboard Hot 100 using virtual Music Notes.</p><div className="how-steps"><article><b>01</b><h2>Find your track</h2><p>Explore a song’s market and the chart outcome being predicted.</p></article><article><b>02</b><h2>Make your call</h2><p>Choose UP to back the prediction or DOWN to take the other side. Preview your Music Note cost and potential payout.</p></article><article><b>03</b><h2>Follow the charts</h2><p>Weekly Billboard results will determine the outcome. These preview markets are illustrative; trading is coming soon.</p></article></div><button className="primary" onClick={() => setInfo(false)}>Explore the markets →</button></section> : selected ? <>
+      <button className="back-link" onClick={() => setSelected(null)}>← All markets</button>
+      <div className="detail-heading"><Artwork market={selected}/><div><span className="eyebrow">BILLBOARD HOT 100 · {selected.category.toUpperCase()}</span><h1>{selected.question}</h1><p>{selected.artist} <span className="dot-separator">·</span> Illustrative weekly market</p></div></div>
+      <div className="detail-layout"><section className="chart-panel"><div className="chart-top"><div><span className="muted">UP probability</span><strong>{selected.chance}% <small className={selected.change > 0 ? "positive" : "negative"}>{selected.change > 0 ? "↗" : "↘"} {Math.abs(selected.change)}%</small></strong></div><span className="sample-badge">Demo chart</span></div><div className="probability-chart"><div className="chart-grid"><span>100%</span><span>75%</span><span>50%</span><span>25%</span><span>0%</span></div><svg viewBox="0 0 700 240" preserveAspectRatio="none" role="img" aria-label={`Illustrative ${period} probability chart, ending at ${selected.chance} percent`}><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop stopColor="#8e7bbc" stopOpacity=".24"/><stop offset="1" stopColor="#8e7bbc" stopOpacity="0"/></linearGradient></defs><path d={`M0 180 L35 175 60 188 90 155 120 161 145 132 175 148 200 110 230 122 260 105 290 121 315 82 345 100 370 78 400 90 425 61 450 73 480 48 510 63 540 42 570 57 605 35 640 45 675 ${240 - selected.chance * 2.4} 700 ${240 - selected.chance * 2.4} V240 H0Z`} fill="url(#chartFill)"/><path d={`M0 180 L35 175 60 188 90 155 120 161 145 132 175 148 200 110 230 122 260 105 290 121 315 82 345 100 370 78 400 90 425 61 450 73 480 48 510 63 540 42 570 57 605 35 640 45 675 ${240 - selected.chance * 2.4} 700 ${240 - selected.chance * 2.4}`} stroke="#8c72b4" strokeWidth="3" fill="none"/></svg></div><div className="chart-dates">{(period === "1D" ? ["00:00", "06:00", "12:00", "18:00", "23:59"] : period === "1M" ? ["Week 1", "Week 2", "Week 3", "Week 4"] : ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]).map(d => <span key={d}>{d}</span>)}</div><div className="chart-bottom"><span>♫ {selected.volume} Notes traded</span><div className="periods">{["1D", "1W", "1M"].map(p => <button aria-pressed={period === p} key={p} className={period === p ? "active" : ""} onClick={() => setPeriod(p)}>{p}</button>)}</div></div><div className="market-rules"><h3>The fine print, in tune.</h3><p>UP wins if: {selected.question.replace("Will ", "").replace("?", ".")} DOWN wins otherwise. Final settlement rules and chart dates will be supplied by the market API.</p><p>Source: Billboard Hot 100 · Virtual Music Notes only</p></div></section>
+      <aside className="order-panel"><div className="order-heading"><h2>Make your call</h2><span>♫ Music Notes</span></div><div className="order-song"><Artwork market={selected}/><div><strong>{selected.song}</strong><p>{selected.artist}</p></div></div><div className="side-picker"><button className={side === "up" ? "up chosen" : "up"} onClick={() => { setSide("up"); setOrderMessage(""); }}>↗ UP <b>{selected.chance}¢</b></button><button className={side === "down" ? "down chosen" : "down"} onClick={() => { setSide("down"); setOrderMessage(""); }}>↘ DOWN <b>{100 - selected.chance}¢</b></button></div><label className="amount-label" htmlFor="amount">Amount in Music Notes</label><div className="amount-input"><span>♫</span><input id="amount" type="number" min="1" max="10000" step="1" value={amount} onChange={e => setAmount(e.target.value)}/></div><div className="quick-amounts">{[100, 250, 500, 1000].map(n => <button key={n} onClick={() => setAmount(String(n))}>{n.toLocaleString()}</button>)}</div><dl className="order-summary"><div><dt>Price per contract</dt><dd>{(side === "up" ? selected.chance : 100 - selected.chance) / 100} Notes</dd></div><div><dt>Contracts</dt><dd>{Math.floor(Math.max(0, Number(amount) || 0) / ((side === "up" ? selected.chance : 100 - selected.chance) / 100)).toLocaleString()}</dd></div><div className="payout"><dt>Potential payout <small>if your prediction wins</small></dt><dd>♫ {Math.floor(Math.max(0, Number(amount) || 0) / ((side === "up" ? selected.chance : 100 - selected.chance) / 100)).toLocaleString()}</dd></div></dl><button className="primary" disabled={!Number.isInteger(Number(amount)) || Number(amount) <= 0 || Number(amount) > 10000} onClick={() => user ? setOrderMessage("Your preview is ready. Order placement will be available when the trading API is connected; no Notes have been spent.") : setAuthMode("signup")}>{user ? "Preview prediction" : "Sign up to predict"} <span>↗</span></button><p role="status" className="order-status">{orderMessage}</p><p className="order-disclaimer">All instinct. No real money.<br />Demo market · Orders are not submitted.</p></aside></div>
+      </> : <>
+      {!watchlist && <section className="hero"><div className="hero-copy"><span className="eyebrow"><span className="live-dot"/> THE MUSIC MOVES. YOU MAKE THE CALL.</span><h1>Good taste.<br />Better <span>predictions.</span></h1><p>Think you know the charts? Hope you don&apos;t fall flat!</p><div className="hero-actions"><a className="primary" href="#markets">Explore markets <span>↗</span></a><button className="primary secondary" onClick={() => setInfo(true)}>How it works <span>↗</span></button></div><div className="hero-footnote"><span>♫</span> Virtual Music Notes. Real bragging rights.</div></div><div className="hero-art" aria-hidden="true"><span className="orbit orbit-one"/><span className="orbit orbit-two"/><span className="floating-note note-one">♪</span><span className="floating-note note-two">✳</span><div className="record-sleeve"><span className="sleeve-top">OCTAVE RECORDS <span>VOL. 001</span></span><div className="vinyl"><span className="vinyl-label">octave.<small>SIDE A · TRUST YOUR TASTE</small><i /></span></div><span className="sleeve-bottom">SOUNDS LIKE A GOOD CALL. <span>↗</span></span></div><div className="floating-pill"><span className="pill-icon">↗</span><div>Your next favorite hit.<small>Your next great prediction.</small></div><Sparkline /></div><span className="art-caption">FOR THE RECORD, YOU CALLED IT.</span></div></section>}
+      <section className="market-section" id="markets"><div className="section-heading"><div><span className="eyebrow">THE NEXT HIT IS YOUR CALL</span><h2>Find your next move<span className="purple-dot">.</span></h2></div><span className="week-label"><Icon name="clock" size={15}/> Weekly markets <span className="sample-badge">Demo preview</span></span></div><div className="market-toolbar"><div className="filters" role="group" aria-label="Filter markets">{["All markets", "Rising", "Falling", "Pop", "Country", "R&B / Soul"].map(f => <button key={f} aria-pressed={filter === f} className={filter === f ? "active" : ""} onClick={() => setFilter(f)}>{f === "Rising" ? "↗ " : f === "Falling" ? "↘ " : ""}{f}</button>)}{filter === "Watchlist" && <button className="active">Watchlist</button>}</div><div className="search-sort"><label className="search-box"><Icon name="search" size={17}/><input aria-label="Search songs or artists" placeholder="Search songs or artists" value={search} onChange={e => setSearch(e.target.value)}/></label><select aria-label="Sort markets" value={sort} onChange={e => setSort(e.target.value)}><option>Trending</option><option>Highest chance</option><option>Most active</option></select></div></div><div className="market-grid">{visible.map(m => <article className="market-card" key={m.id}><div className="card-top"><Artwork market={m}/><div className="song-info"><span>{m.category} <span className="tiny-dot">·</span> Hot 100</span><button onClick={() => openMarket(m)}>{m.song}</button><p>{m.artist}</p></div><button className={`save-button ${saved.includes(m.id) ? "saved" : ""}`} aria-label={`${saved.includes(m.id) ? "Remove" : "Save"} ${m.song} ${saved.includes(m.id) ? "from" : "to"} watchlist`} aria-pressed={saved.includes(m.id)} onClick={() => setSaved(saved.includes(m.id) ? saved.filter(id => id !== m.id) : [...saved, m.id])}><Icon name="star" size={18}/></button></div><button className="market-question" onClick={() => openMarket(m)}>{m.question}</button><div className="chance-row"><div><strong>{m.chance}<span>%</span></strong><span className="chance-caption">chance of UP</span></div><div className="sparkline-box"><Sparkline down={m.change < 0}/><span className={m.change > 0 ? "positive" : "negative"}>{m.change > 0 ? "↗" : "↘"} {Math.abs(m.change)}% this week</span></div></div><div className="card-trades"><button className="up" onClick={() => openMarket(m, "up")}><span>↗ UP</span><b>{m.chance}¢</b></button><button className="down" onClick={() => openMarket(m, "down")}><span>↘ DOWN</span><b>{100 - m.chance}¢</b></button></div><div className="card-footer"><span>♫ {m.volume} vol.</span><span>{m.tag ? <><span className="tag-dot"/>{m.tag}</> : <>Current rank <b>#{m.rank}</b></>}</span></div></article>)}</div>{!visible.length && <div className="empty-state"><Icon name="music" size={32}/><h3>No tracks here yet.</h3><p>{watchlist ? "Tap a star on a market to save it to your watchlist." : "Try another artist, song, or category."}</p><button className="text-button" onClick={() => { setSearch(""); setFilter("All markets"); setWatchlist(false); }}>See all markets →</button></div>}</section><section className="join-banner"><span className="join-icon">✳</span><div><h2>A good ear deserves a little credit.</h2><p>Follow the charts. Make your predictions. Find your edge.</p></div><button className="primary" onClick={() => user ? setInfo(true) : setAuthMode("signup")}>{user ? "How it works" : "Join the next wave"} ↗</button></section>
+      </>}
+    </main><footer><button className="brand footer-brand" onClick={() => { setSelected(null); setInfo(false); setWatchlist(false); setFilter("All markets"); }}><Image src="/octave-notes.svg" alt="Octave" width={812} height={256} className="brand-logo" /></button><span>Made for music minds.</span><span className="footer-right">Virtual currency. Endless possibility. <span>© 2026 Octave</span></span></footer>
+    {authMode && <AuthDialog mode={authMode} onClose={() => setAuthMode(null)}/>}
+  </div>;
 }

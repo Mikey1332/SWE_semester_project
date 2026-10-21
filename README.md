@@ -98,13 +98,31 @@ Without `DATABASE_URL`, the server skips database setup and database tests are s
 
 ### Frontend
 
+To test just the UI, you only need Node.js 24 and npm. You can skip the database, backend, and Python ingestion setup above.
+
+From the repository root (these commands also work in PowerShell):
+
 ```bash
 cd frontend
 npm ci
 npm run dev
 ```
 
-Open http://localhost:3000. Stop with Ctrl+C.
+Open [http://localhost:3000](http://localhost:3000). Stop with Ctrl+C. For later sessions, run `npm run dev` from `frontend/`; repeat `npm ci` when dependencies change. The page reloads automatically as you edit UI files.
+
+The UI includes demo markets, search, category filters, sorting, a watchlist, and UP/DOWN prediction previews. Watchlist selections last for the current page session. Market prices and charts are illustrative; predictions do not submit orders or spend Music Notes.
+
+**Testing signup and login:** Firebase handles account creation and sign-in, and the frontend then calls `/api/auth/me` to verify the session with the Go backend at `http://localhost:8080`. Run the backend in a separate terminal for this verification to succeed. Configure Firebase Admin credentials before starting it:
+
+```powershell
+$env:GOOGLE_APPLICATION_CREDENTIALS = "C:\path\to\firebase-service-account.json"
+cd backend
+go run .
+```
+
+Run these commands from the repository root in the second terminal, after downloading Go dependencies as described above. Use a service-account JSON key for the team's Firebase project, obtained through Firebase Project settings > Service accounts. Store it outside the repository and never commit it. The environment variable must be set in the same terminal that runs the backend. Without credentials, startup fails with `google: could not find default credentials`.
+
+PostgreSQL is optional for authentication-only testing: when `DATABASE_URL` is unset, the backend skips database setup. If it is set, the configured database must be reachable.
 
 Checks from `frontend/`:
 

@@ -1,36 +1,39 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Octave Frontend
 
-## Getting Started
+Octave's Next.js frontend provides music prediction markets using virtual Music Notes.
 
-First, run the development server:
+## Run locally
+
+Install Node.js 24 with npm. From this `frontend/` directory, run:
 
 ```bash
+npm ci
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000). Stop the server with Ctrl+C. For later sessions, run `npm run dev`; repeat `npm ci` when dependencies change. Edits to the UI reload automatically.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## What you can test
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- Browse demo markets and open a market's chart and prediction panel.
+- Search songs and artists, filter categories, and sort markets.
+- Save markets with the star button and view them in Watchlist. Selections last for the current page session.
+- Choose UP or DOWN and enter Music Notes to preview potential payouts.
 
-## Learn More
+Demo prices and charts are illustrative. Orders are not submitted and no Music Notes are spent. These UI features do not require the backend, PostgreSQL, or Python ingestion.
 
-To learn more about Next.js, take a look at the following resources:
+## Signup and login
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The account dialog uses Firebase authentication and then verifies the session through the Go backend. Start the backend separately on port 8080 with Firebase Admin credentials configured. Without it, Firebase authentication may succeed while backend verification fails.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+See the [root README's frontend instructions](../README.md#frontend) for the PowerShell credentials setup and backend requirements. Keep service-account keys outside the repository.
 
-## Deploy on Vercel
+## Checks
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Run from `frontend/`:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run lint
+npm run build
+npm test
+```

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="812" height="256" viewBox="0 0 812 256" role="img" aria-labelledby="title">
+  <title id="title">Octave — each letter inside a musical note</title>
+  <defs>
+    <g id="note" fill="#000">
+      <ellipse cx="56" cy="194" rx="58" ry="46" transform="rotate(-28 56 194)" />
+      <path d="M89 18h9v164h-9z" />
+      <path d="M96 23c8 24 62 22 63 58 1 21-15 37-30 48 15-19 23-39 13-51-9-12-28-10-46-6z" />
+    </g>
+    <mask id="letter-cutouts" maskUnits="userSpaceOnUse" x="0" y="0" width="812" height="256">
+      <rect width="812" height="256" fill="#fff" />
+      <g fill="#000" font-family="Arial, Helvetica, sans-serif" font-size="72" font-weight="900" text-anchor="middle">
+      <text x="56" y="216">o</text>
+      <text x="186" y="216">c</text>
+      <text x="316" y="216">t</text>
+      <text x="446" y="216">a</text>
+      <text x="576" y="216">v</text>
+      <text x="706" y="216">e</text>
+      </g>
+    </mask>
+  </defs>
+  <g mask="url(#letter-cutouts)">
+    <use href="#note" x="0" />
+    <use href="#note" x="130" />
+    <use href="#note" x="260" />
+    <use href="#note" x="390" />
+    <use href="#note" x="520" />
+    <use href="#note" x="650" />
+  </g>
+</svg>

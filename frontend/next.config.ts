@@ -14,8 +14,9 @@ const nextConfig: NextConfig = {
   async rewrites() {
   return [
     {
-      source: "/api/auth/me",
-      destination: "http://localhost:8080/auth/me",
+      // Every /api/* call goes to the Go backend: /api/auth/me, /api/markets/1/buy, ...
+      source: "/api/:path*",
+      destination: "http://localhost:8080/:path*",
     },
   ];
   },

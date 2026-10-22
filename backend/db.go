@@ -238,8 +238,11 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 	return tx.Commit()
 }
 
-// CreateUser inserts a user funded with the StartingBalance grant.
-func CreateUser(ctx context.Context, db *sql.DB, username, email, passwordHash string) (int64, error) {
+// UserForFirebase returns the ledger user for a Firebase account, creating it
+// with the StartingBalance grant on first sign-in. Concurrent first sign-ins
+// still create one user and one grant: the loser's insert waits on the unique
+// firebase_uid, then finds the winner's row.
+func UserForFirebase(ctx context.Context, db *sql.DB, firebaseUID, email string) (int64, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -248,8 +251,14 @@ func CreateUser(ctx context.Context, db *sql.DB, username, email, passwordHash s
 
 	var id int64
 	err = tx.QueryRowContext(ctx,
-		`INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id`,
-		username, email, passwordHash).Scan(&id)
+		`INSERT INTO users (firebase_uid, email) VALUES ($1, NULLIF($2, ''))
+		 ON CONFLICT (firebase_uid) DO NOTHING
+		 RETURNING id`,
+		firebaseUID, email).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) { // signed in before
+		err = db.QueryRowContext(ctx, `SELECT id FROM users WHERE firebase_uid = $1`, firebaseUID).Scan(&id)
+		return id, err
+	}
 	if err != nil {
 		return 0, err
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -42,8 +43,8 @@ func unique(prefix string) string {
 
 func newUser(t *testing.T, db *sql.DB) int64 {
 	t.Helper()
-	name := unique("user")
-	id, err := CreateUser(context.Background(), db, name, name+"@example.com", "hash")
+	uid := unique("uid")
+	id, err := UserForFirebase(context.Background(), db, uid, uid+"@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,21 +107,87 @@ func TestLedger(t *testing.T) {
 	}
 	check(8_000, -2_500)
 
+	signInAs(t, id)
 	res := httptest.NewRecorder()
-	routes(db, nil).ServeHTTP(res, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/users/%d/balance", id), nil))
-	if want := `{"balance":8000,"realized_pnl":-2500}`; strings.TrimSpace(res.Body.String()) != want {
-		t.Fatalf("GET balance: %d %s, want %s", res.Code, res.Body, want)
+	routes(db).ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/auth/me", nil))
+	var me struct {
+		Balance     int64 `json:"balance"`
+		RealizedPnL int64 `json:"realized_pnl"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &me); err != nil || me.Balance != 8_000 || me.RealizedPnL != -2_500 {
+		t.Fatalf("GET /auth/me: %d %s, want balance 8000 and realized_pnl -2500", res.Code, res.Body)
+	}
+}
+
+// signInAs makes every request in this test act as userID, standing in for a
+// verified Firebase token.
+func signInAs(t *testing.T, userID int64) {
+	t.Helper()
+	anonymous := currentUser
+	currentUser = func(*http.Request) (int64, error) { return userID, nil }
+	t.Cleanup(func() { currentUser = anonymous })
+}
+
+// First sign-in creates the user with the starting grant; later and concurrent
+// sign-ins return the same user and never grant twice.
+func TestUserForFirebase(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	uid := unique("uid")
+
+	ids := make([]int64, 10)
+	var wg sync.WaitGroup
+	for i := range ids {
+		wg.Go(func() {
+			id, err := UserForFirebase(ctx, db, uid, uid+"@example.com")
+			if err != nil {
+				t.Error(err)
+			}
+			ids[i] = id
+		})
+	}
+	wg.Wait()
+	again, err := UserForFirebase(ctx, db, uid, uid+"@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range append(ids, again) {
+		if id != ids[0] {
+			t.Fatalf("sign-ins returned different users: %v and %d", ids, again)
+		}
 	}
 
-	for path, want := range map[string]int{
-		"/users/0/balance":   http.StatusNotFound,
-		"/users/abc/balance": http.StatusBadRequest,
-	} {
-		res = httptest.NewRecorder()
-		routes(db, nil).ServeHTTP(res, httptest.NewRequest(http.MethodGet, path, nil))
-		if res.Code != want {
-			t.Fatalf("GET %s: got %d, want %d", path, res.Code, want)
-		}
+	var grants int
+	if err := db.QueryRow(`SELECT count(*) FROM ledger_entries WHERE user_id = $1 AND kind = 'grant'`,
+		ids[0]).Scan(&grants); err != nil {
+		t.Fatal(err)
+	}
+	if grants != 1 {
+		t.Fatalf("%d grants, want exactly 1", grants)
+	}
+	checkUser(t, db, ids[0], StartingBalance, 0)
+}
+
+func TestAuthMe(t *testing.T) {
+	db := testDB(t)
+	uid := unique("uid")
+	id, err := UserForFirebase(context.Background(), db, uid, uid+"@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res := httptest.NewRecorder()
+	routes(db).ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/auth/me", nil))
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /auth/me signed out: got %d, want 401", res.Code)
+	}
+
+	signInAs(t, id)
+	res = httptest.NewRecorder()
+	routes(db).ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/auth/me", nil))
+	want := fmt.Sprintf(`{"user_id":%d,"uid":%q,"email":%q,"balance":10000,"realized_pnl":0}`, id, uid, uid+"@example.com")
+	if res.Code != http.StatusOK || strings.TrimSpace(res.Body.String()) != want {
+		t.Fatalf("GET /auth/me: %d %s, want 200 %s", res.Code, res.Body, want)
 	}
 }
 
@@ -410,9 +477,7 @@ func TestBuyEndpoint(t *testing.T) {
 	marketID, _, _ := newMarket(t, db, 50, 5, 62)
 	id := newUser(t, db)
 
-	anonymous := currentUser
-	currentUser = func(*http.Request) (int64, bool) { return id, true } // stand-in for auth
-	t.Cleanup(func() { currentUser = anonymous })
+	signInAs(t, id)
 
 	for _, c := range []struct {
 		body, want string
@@ -425,7 +490,7 @@ func TestBuyEndpoint(t *testing.T) {
 	} {
 		res := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/markets/%d/buy", marketID), strings.NewReader(c.body))
-		routes(db, nil).ServeHTTP(res, req)
+		routes(db).ServeHTTP(res, req)
 		if res.Code != c.code || (c.want != "" && strings.TrimSpace(res.Body.String()) != c.want) {
 			t.Fatalf("POST %s: %d %s, want %d %s", c.body, res.Code, res.Body, c.code, c.want)
 		}

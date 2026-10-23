@@ -45,6 +45,12 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 	}
+
+	// A database created before the ledger merge recorded the old 001 as applied,
+	// so it never gets the market columns. Fail now instead of on the first buy.
+	if _, err := db.ExecContext(ctx, `SELECT yes_price, closes_at FROM markets LIMIT 0`); err != nil {
+		return errors.New("database has the schema from before the ledger merge; reset it once (README: One-time reset after the ledger merge)")
+	}
 	return nil
 }
 

@@ -17,7 +17,10 @@ import (
 	"google.golang.org/api/option"
 )
 
-var errNotSignedIn = errors.New("sign-in required")
+var (
+	errNotSignedIn = errors.New("sign-in required")
+	errNoDatabase  = errors.New("database not configured: start PostgreSQL, set DATABASE_URL and restart the backend")
+)
 
 // currentUser returns the signed-in ledger user for a request. main points it
 // at firebaseUser; until then (and in tests) every request is anonymous.
@@ -34,6 +37,7 @@ func firebaseUser(authClient *auth.Client, db *sql.DB) func(*http.Request) (int6
 		}
 		token, err := authClient.VerifyIDToken(r.Context(), idToken)
 		if err != nil {
+			log.Printf("firebase rejected sign-in token: %v", err) // expired, wrong project, clock skew...
 			return 0, errNotSignedIn
 		}
 		email, _ := token.Claims["email"].(string)
@@ -45,6 +49,9 @@ func firebaseUser(authClient *auth.Client, db *sql.DB) func(*http.Request) (int6
 func signedIn(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	id, err := currentUser(r)
 	switch {
+	case errors.Is(err, errNoDatabase):
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return 0, false
 	case errors.Is(err, errNotSignedIn):
 		http.Error(w, "sign-in required", http.StatusUnauthorized)
 		return 0, false
@@ -173,7 +180,8 @@ func main() {
 		currentUser = firebaseUser(authClient, db)
 		go RunBots(ctx, db)
 	} else {
-		log.Println("DATABASE_URL not set; skipping database")
+		log.Println("DATABASE_URL not set: sign-in and trading return 503 until it is set")
+		currentUser = func(*http.Request) (int64, error) { return 0, errNoDatabase }
 	}
 
 	server := &http.Server{

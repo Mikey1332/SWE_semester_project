@@ -126,6 +126,8 @@ cd backend
 go run .
 ```
 
+The backend does not read `.env` files; set `DATABASE_URL` in the same terminal before `go run .`. If it is missing, `/api/auth/me` returns 503 "database not configured" even though Firebase signed you in.
+
 No Firebase credentials or service-account key are needed: the backend only verifies sign-in tokens, which uses the project ID and Google's public signing keys. The first successful sign-in creates the user's ledger account with 10,000 Music Notes; `/api/auth/me` returns `{"user_id", "uid", "email", "balance", "realized_pnl"}`.
 
 Without `DATABASE_URL` the backend still starts, but `/api/auth/me` and buying return 401/503 because sign-in creates a ledger account. If it is set, the configured database must be reachable.

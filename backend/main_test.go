@@ -62,6 +62,25 @@ func TestFirebaseUserNeedsBearerToken(t *testing.T) {
 	}
 }
 
+// Without a database the backend says so, rather than claiming the user isn't signed in.
+func TestNoDatabaseIs503(t *testing.T) {
+	anonymous := currentUser
+	currentUser = func(*http.Request) (int64, error) { return 0, errNoDatabase }
+	t.Cleanup(func() { currentUser = anonymous })
+
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/auth/me", nil),
+		httptest.NewRequest(http.MethodPost, "/markets/1/buy", strings.NewReader(`{"side":"yes","quantity":1}`)),
+	} {
+		response := httptest.NewRecorder()
+		routes(nil).ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "DATABASE_URL") {
+			t.Fatalf("%s %s: got %d %q, want 503 mentioning DATABASE_URL",
+				request.Method, request.URL.Path, response.Code, response.Body)
+		}
+	}
+}
+
 // A failure while looking up the user is a server error, not a sign-in error.
 func TestSignInFailureIs500(t *testing.T) {
 	anonymous := currentUser

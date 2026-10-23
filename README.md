@@ -117,7 +117,7 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000). Stop with Ctrl+C. For later sessions, run `npm run dev` from `frontend/`; repeat `npm ci` when dependencies change. The page reloads automatically as you edit UI files.
 
-The UI includes demo markets, search, category filters, sorting, a watchlist, and UP/DOWN prediction previews. Watchlist selections last for the current page session. Market prices and charts are illustrative; predictions do not submit orders or spend Music Notes.
+The UI includes demo markets, search, category filters, sorting, a watchlist, and UP/DOWN prediction previews. Watchlist selections last for the current page session. Market prices and charts are illustrative; predictions do not submit orders or spend Music Notes. Below them, **Live markets** lists the bots' real open markets from the backend: signed-in users pick YES or NO, enter a number of contracts and buy or sell with Music Notes, and see their balance and realized P&L.
 
 **Testing signup and login:** Firebase handles account creation and sign-in, and the frontend then calls `/api/auth/me`, which the Go backend at `http://localhost:8080` answers after verifying the Firebase token. Run the backend in a separate terminal with `DATABASE_URL` set (see Backend above):
 
@@ -204,11 +204,13 @@ Project scaffolding, CI, the database schema, the Music Note ledger, and manual 
 - A user's first Firebase sign-in creates their ledger account with a 10,000 Music Note `grant` (`UserForFirebase` in `backend/db.go`). Later or concurrent sign-ins never grant twice.
 - Every balance change goes through `Post`, which updates `balances` and appends to `ledger_entries` in the caller's transaction, and rejects overdrafts.
 - Markets are Kalshi-style YES/NO questions created by the bots: "Will this song move at least `shift` spots from `baseline_rank` on the chart dated `chart_date`?" The bot sets `yes_price` (1–99); NO costs `100 - yes_price`.
-- `Buy` sells contracts from the house at that price until the market's `closes_at` (Monday before the chart date, midnight New York time). Users hold them until `Resolve` reads the chart, pays 100 notes per winning contract, and closes every position in the market. A song missing from an ingested chart counts as rank 101.
+- `Buy` sells contracts from the house at that price until the market's `closes_at` (Monday before the chart date, midnight New York time). Users can sell contracts back at the current price (`Sell`) until `closes_at`, or hold them until `Resolve` reads the chart, pays 100 notes per winning contract, and closes every position in the market. A song missing from an ingested chart counts as rank 101.
 - The bots (`backend/bots.go`) run inside the server every 15 minutes. They resolve every open market whose chart is in `chart_snapshots`, then open next week's market for each song on the latest chart. `suggest` picks each song's shift from its latest direction and typical move size, and prices YES by how often the song has made that move before. Ingestion only needs to insert `chart_snapshots` rows (`song_id`, `chart_date`, `rank`), creating `songs` as needed. A chart counts as loaded only once all 100 ranks are in, so nothing settles on a partial chart.
 - The `user_pnl` view reports realized P&L, excluding grants; money in open positions is not counted as a loss until the market resolves.
-- `GET /auth/me` (signed in) returns `{"user_id", "uid", "email", "balance", "realized_pnl"}`.
+- `GET /auth/me` (signed in) returns `{"user_id", "uid", "email", "balance", "realized_pnl", "positions"}`, where each position is `{"market_id", "side", "quantity", "cost_basis"}`.
+- `GET /markets` (public) lists markets still open for trading: `id`, `title`, `artist`, `chart_date`, `baseline_rank`, `shift`, `yes_price`, `no_price`, `closes_at`.
 - `POST /markets/{id}/buy` with `{"side": "yes" | "no", "quantity": n}` returns `{"balance": ...}` for the signed-in user (`Authorization: Bearer <Firebase ID token>`), or 401 without a valid token.
+- `POST /markets/{id}/sell` takes the same body and sells held contracts back at the current price; selling more than you hold returns 409. The sold share of the cost basis leaves with them, so realized P&L moves by proceeds minus that cost.
 - Add schema changes as new numbered files in `backend/migrations/`; never edit an applied migration.
 
 A previously reported frontend ESLint dependency vulnerability remains under review.

@@ -1732,3 +1732,171 @@ footer {
 html {
   scrollbar-gutter:stable;
 }
+
+/* Live markets: real markets from the backend, traded with Music Notes */
+.live-list {
+  display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));
+  gap:16px
+}
+.live-market {
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:9px;
+  padding:18px;
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+  min-width:0
+}
+.live-song {
+  display:flex;
+  flex-direction:column;
+  gap:3px
+}
+.live-song strong {
+  font-size:15px;
+  font-weight:600;
+  overflow-wrap:anywhere
+}
+.live-song span,
+.live-meta {
+  font-size:11px;
+  color:var(--muted)
+}
+.live-question {
+  font-size:13px;
+  line-height:1.5;
+  margin:0
+}
+.live-sides>button {
+  border:1px solid transparent;
+  opacity:.65
+}
+.live-sides>button.chosen {
+  opacity:1;
+  border-color:currentColor
+}
+.live-order {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:end;
+  gap:9px
+}
+.live-order label {
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  font-size:10px;
+  color:var(--muted)
+}
+.live-order input {
+  width:86px;
+  padding:10px;
+  border:1px solid var(--line);
+  border-radius:6px;
+  font:inherit;
+  font-size:13px;
+  color:var(--foreground);
+  background:var(--background)
+}
+.live-total {
+  flex:1;
+  font-size:13px;
+  font-weight:600;
+  padding-bottom:11px;
+  min-width:60px
+}
+.live-order .primary:disabled {
+  opacity:.4;
+  cursor:not-allowed
+}
+.live-meta {
+  margin:0
+}
+.live-empty {
+  font-size:13px;
+  color:var(--muted);
+  padding:18px;
+  border:1px dashed var(--line);
+  border-radius:9px
+}
+.live-more {
+  margin-top:18px
+}
+
+/* My ledger: the signed-in user's buys, sells and payouts */
+.ledger-filters {
+  margin-bottom:18px
+}
+.ledger-table-wrap {
+  overflow-x:auto;
+  border:1px solid var(--line);
+  border-radius:9px;
+  background:#fff
+}
+.ledger-table {
+  width:100%;
+  border-collapse:collapse;
+  font-size:12px;
+  min-width:860px
+}
+.ledger-table th {
+  text-align:left;
+  font-size:10px;
+  font-weight:500;
+  letter-spacing:.4px;
+  text-transform:uppercase;
+  color:var(--muted);
+  padding:12px 14px;
+  border-bottom:1px solid var(--line);
+  white-space:nowrap
+}
+.ledger-table td {
+  padding:12px 14px;
+  border-bottom:1px solid #f0f0ea;
+  vertical-align:top
+}
+.ledger-table tr:last-child td {
+  border-bottom:0
+}
+.ledger-table .num {
+  text-align:right;
+  white-space:nowrap;
+  font-variant-numeric:tabular-nums
+}
+.ledger-song {
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+  max-width:320px
+}
+.ledger-song span,
+.ledger-song small {
+  color:var(--muted);
+  font-size:11px
+}
+.ledger-side {
+  display:inline-block;
+  padding:3px 7px;
+  border-radius:4px;
+  font-size:10px;
+  font-weight:600
+}
+.ledger-result {
+  display:inline-block;
+  padding:3px 8px;
+  border-radius:10px;
+  font-size:10px;
+  font-weight:600;
+  background:#eeece4;
+  color:#7e8175
+}
+.ledger-result.won {
+  background:#e4f0e8;
+  color:#4f826a
+}
+.ledger-result.lost {
+  background:#efe8e5;
+  color:#a4746d
+}

@@ -87,6 +87,10 @@ type Entry struct {
 	Amount   int64  // positive credits, negative debits
 	Kind     string // grant, buy, sell, or payout
 	MarketID *int64
+	// The contracts a buy, sell or payout moved; empty for grants.
+	Side     string
+	Quantity int64
+	Price    int64 // Music Notes per contract
 }
 
 // Post applies e to the user's balance and records it in the ledger inside tx,
@@ -106,9 +110,9 @@ func Post(ctx context.Context, tx *sql.Tx, e Entry) (int64, error) {
 	}
 
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO ledger_entries (user_id, amount, balance_after, kind, market_id)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		e.UserID, e.Amount, balance, e.Kind, e.MarketID)
+		`INSERT INTO ledger_entries (user_id, amount, balance_after, kind, market_id, side, quantity, price)
+		 VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, 0), NULLIF($8, 0))`,
+		e.UserID, e.Amount, balance, e.Kind, e.MarketID, e.Side, e.Quantity, e.Price)
 	return balance, err
 }
 
@@ -154,7 +158,8 @@ func Buy(ctx context.Context, db *sql.DB, userID, marketID int64, side string, q
 		return 0, err
 	}
 	cost := price * quantity
-	balance, err := Post(ctx, tx, Entry{UserID: userID, Amount: -cost, Kind: "buy", MarketID: &marketID})
+	balance, err := Post(ctx, tx, Entry{UserID: userID, Amount: -cost, Kind: "buy", MarketID: &marketID,
+		Side: side, Quantity: quantity, Price: price})
 	if err != nil {
 		return 0, err
 	}
@@ -200,7 +205,8 @@ func Sell(ctx context.Context, db *sql.DB, userID, marketID int64, side string, 
 	// Rounds down, so a partial sale never takes the whole cost basis; selling
 	// everything takes exactly all of it.
 	soldCost := cost * quantity / held
-	balance, err := Post(ctx, tx, Entry{UserID: userID, Amount: price * quantity, Kind: "sell", MarketID: &marketID})
+	balance, err := Post(ctx, tx, Entry{UserID: userID, Amount: price * quantity, Kind: "sell", MarketID: &marketID,
+		Side: side, Quantity: quantity, Price: price})
 	if err != nil {
 		return 0, err
 	}
@@ -289,7 +295,8 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 	}
 
 	for _, w := range wins {
-		if _, err := Post(ctx, tx, Entry{UserID: w.userID, Amount: w.quantity * ContractPayout, Kind: "payout", MarketID: &marketID}); err != nil {
+		if _, err := Post(ctx, tx, Entry{UserID: w.userID, Amount: w.quantity * ContractPayout, Kind: "payout", MarketID: &marketID,
+			Side: outcome, Quantity: w.quantity, Price: ContractPayout}); err != nil {
 			return err
 		}
 	}

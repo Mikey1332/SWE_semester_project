@@ -665,3 +665,71 @@ func TestMarketsList(t *testing.T) {
 		t.Fatalf("open market %d not listed", openID)
 	}
 }
+
+// GET /me/ledger shows each buy, sell and payout with the contracts it moved
+// and how the market turned out, newest first.
+func TestMyLedger(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	marketID, songID, chartDate := newMarket(t, db, 50, 5, 62) // YES = rises 5+ from #50
+	id := newUser(t, db)
+
+	res := httptest.NewRecorder()
+	routes(db).ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/me/ledger", nil))
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("signed out: got %d, want 401", res.Code)
+	}
+
+	if _, err := Buy(ctx, db, id, marketID, "yes", 10); err != nil { // -620
+		t.Fatal(err)
+	}
+	if _, err := Sell(ctx, db, id, marketID, "yes", 4); err != nil { // +248
+		t.Fatal(err)
+	}
+	addRank(t, db, songID, chartDate, 44) // rose 6: YES wins
+	fillChart(t, db, chartDate)
+	if err := Resolve(ctx, db, marketID); err != nil { // +600 for the 6 still held
+		t.Fatal(err)
+	}
+
+	signInAs(t, id)
+	res = httptest.NewRecorder()
+	routes(db).ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/me/ledger", nil))
+	var entries []struct {
+		Kind         string  `json:"kind"`
+		Amount       int64   `json:"amount"`
+		BalanceAfter int64   `json:"balance_after"`
+		Side         *string `json:"side"`
+		Quantity     *int64  `json:"quantity"`
+		Price        *int64  `json:"price"`
+		MarketID     *int64  `json:"market_id"`
+		Title        *string `json:"title"`
+		Status       *string `json:"market_status"`
+		Outcome      *string `json:"outcome"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &entries); err != nil || res.Code != http.StatusOK {
+		t.Fatalf("GET /me/ledger: %d %s", res.Code, res.Body)
+	}
+
+	type row struct {
+		kind                      string
+		amount, after, qty, price int64
+	}
+	want := []row{
+		{"payout", 600, 10_228, 6, 100},
+		{"sell", 248, 9_628, 4, 62},
+		{"buy", -620, 9_380, 10, 62},
+	}
+	if len(entries) != 4 || entries[3].Kind != "grant" || entries[3].Side != nil || entries[3].MarketID != nil {
+		t.Fatalf("got %d entries (last %+v), want payout, sell, buy, then the grant with no contract", len(entries), entries[len(entries)-1])
+	}
+	for i, w := range want {
+		e := entries[i]
+		if e.Kind != w.kind || e.Amount != w.amount || e.BalanceAfter != w.after ||
+			e.Side == nil || *e.Side != "yes" || e.Quantity == nil || *e.Quantity != w.qty || e.Price == nil || *e.Price != w.price ||
+			e.MarketID == nil || *e.MarketID != marketID || e.Title == nil ||
+			e.Status == nil || *e.Status != "resolved" || e.Outcome == nil || *e.Outcome != "yes" {
+			t.Fatalf("entry %d = %+v, want %s %+d (balance %d) of %d YES at %d in resolved market %d", i, e, w.kind, w.amount, w.after, w.qty, w.price, marketID)
+		}
+	}
+}

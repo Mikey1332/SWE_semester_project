@@ -34,3 +34,35 @@ export function parseQuantity(text: string): number | null {
     const n = Number(text);
     return Number.isInteger(n) && n >= 1 && n <= 1_000_000 ? n : null;
 }
+
+// One row of GET /me/ledger. Contract and market fields are null for grants
+// (and contract fields for trades made before they were recorded).
+export type LedgerEntry = {
+    id: number;
+    created_at: string;
+    kind: "grant" | "buy" | "sell" | "payout";
+    amount: number;
+    balance_after: number;
+    side: TradeSide | null;
+    quantity: number | null;
+    price: number | null;
+    market_id: number | null;
+    title: string | null;
+    artist: string | null;
+    chart_date: string | null;
+    baseline_rank: number | null;
+    shift: number | null;
+    market_status: "open" | "resolved" | null;
+    outcome: TradeSide | null;
+};
+
+export const entryLabels: Record<LedgerEntry["kind"], string> = { grant: "Starting balance", buy: "Bought", sell: "Sold", payout: "Payout" };
+
+// How the contracts in an entry turned out: still open, or won/lost once the market resolved.
+export function entryResult(e: LedgerEntry): "Open" | "Won" | "Lost" | "" {
+    if (!e.market_status || !e.side)
+        return "";
+    if (e.market_status !== "resolved")
+        return "Open";
+    return e.outcome === e.side ? "Won" : "Lost";
+}

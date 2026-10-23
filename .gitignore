@@ -2,3 +2,7 @@
 __pycache__/
 .pytest_cache/
 .idea/
+
+# Local environment and OS files
+.env
+.DS_Store

@@ -1824,3 +1824,79 @@ html {
 .live-more {
   margin-top:18px
 }
+
+/* My ledger: the signed-in user's buys, sells and payouts */
+.ledger-filters {
+  margin-bottom:18px
+}
+.ledger-table-wrap {
+  overflow-x:auto;
+  border:1px solid var(--line);
+  border-radius:9px;
+  background:#fff
+}
+.ledger-table {
+  width:100%;
+  border-collapse:collapse;
+  font-size:12px;
+  min-width:860px
+}
+.ledger-table th {
+  text-align:left;
+  font-size:10px;
+  font-weight:500;
+  letter-spacing:.4px;
+  text-transform:uppercase;
+  color:var(--muted);
+  padding:12px 14px;
+  border-bottom:1px solid var(--line);
+  white-space:nowrap
+}
+.ledger-table td {
+  padding:12px 14px;
+  border-bottom:1px solid #f0f0ea;
+  vertical-align:top
+}
+.ledger-table tr:last-child td {
+  border-bottom:0
+}
+.ledger-table .num {
+  text-align:right;
+  white-space:nowrap;
+  font-variant-numeric:tabular-nums
+}
+.ledger-song {
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+  max-width:320px
+}
+.ledger-song span,
+.ledger-song small {
+  color:var(--muted);
+  font-size:11px
+}
+.ledger-side {
+  display:inline-block;
+  padding:3px 7px;
+  border-radius:4px;
+  font-size:10px;
+  font-weight:600
+}
+.ledger-result {
+  display:inline-block;
+  padding:3px 8px;
+  border-radius:10px;
+  font-size:10px;
+  font-weight:600;
+  background:#eeece4;
+  color:#7e8175
+}
+.ledger-result.won {
+  background:#e4f0e8;
+  color:#4f826a
+}
+.ledger-result.lost {
+  background:#efe8e5;
+  color:#a4746d
+}

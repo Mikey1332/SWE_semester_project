@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { held, marketQuestion, parseQuantity, sidePrice, type Account, type LiveMarket } from "../app/trading";
+import { entryLabels, entryResult, held, marketQuestion, parseQuantity, sidePrice, type Account, type LedgerEntry, type LiveMarket } from "../app/trading";
 
 const market: LiveMarket = {
     id: 7, title: "Golden", artist: "HUNTR/X", chart_date: "2026-10-31", baseline_rank: 12,
@@ -23,4 +23,17 @@ test("price and holdings per side", () => {
 test("quantity must be a whole number the backend accepts", () => {
     expect(parseQuantity("10")).toBe(10);
     for (const bad of ["", "0", "-1", "2.5", "abc", "1000001"]) expect(parseQuantity(bad)).toBeNull();
+});
+
+test("ledger entries show how their contracts turned out", () => {
+    const base: LedgerEntry = {
+        id: 1, created_at: "2026-10-22T12:00:00Z", kind: "buy", amount: -620, balance_after: 9380,
+        side: "yes", quantity: 10, price: 62, market_id: 7, title: "Golden", artist: "HUNTR/X",
+        chart_date: "2026-10-31", baseline_rank: 12, shift: 5, market_status: "open", outcome: null,
+    };
+    expect(entryResult(base)).toBe("Open");
+    expect(entryResult({ ...base, market_status: "resolved", outcome: "yes" })).toBe("Won");
+    expect(entryResult({ ...base, market_status: "resolved", outcome: "no" })).toBe("Lost");
+    expect(entryResult({ ...base, kind: "grant", side: null, market_id: null, market_status: null })).toBe("");
+    expect(entryLabels.sell).toBe("Sold");
 });

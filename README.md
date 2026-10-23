@@ -211,6 +211,7 @@ Project scaffolding, CI, the database schema, the Music Note ledger, and manual 
 - `GET /markets` (public) lists markets still open for trading: `id`, `title`, `artist`, `chart_date`, `baseline_rank`, `shift`, `yes_price`, `no_price`, `closes_at`.
 - `POST /markets/{id}/buy` with `{"side": "yes" | "no", "quantity": n}` returns `{"balance": ...}` for the signed-in user (`Authorization: Bearer <Firebase ID token>`), or 401 without a valid token.
 - `POST /markets/{id}/sell` takes the same body and sells held contracts back at the current price; selling more than you hold returns 409. The sold share of the cost basis leaves with them, so realized P&L moves by proceeds minus that cost.
+- `GET /me/ledger` (signed in) returns the user's ledger, newest first: each grant, buy, sell and payout with `amount`, `balance_after`, the contracts it moved (`side`, `quantity`, `price`; empty for grants and for trades made before migration 004) and its market (`title`, `artist`, `chart_date`, `shift`, `market_status`, `outcome`). The **My ledger** tab in the frontend shows it with All / Bought / Sold / Payouts filters and a Won / Lost / Open result per entry.
 - Add schema changes as new numbered files in `backend/migrations/`; never edit an applied migration.
 
 A previously reported frontend ESLint dependency vulnerability remains under review.

@@ -219,6 +219,69 @@ func routes(db *sql.DB) http.Handler {
 		writeJSON(w, body)
 	})
 
+	// The signed-in user's ledger, newest first: every grant, buy, sell and
+	// payout, with the contracts it moved and how its market turned out.
+	mux.HandleFunc("GET /me/ledger", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		type entry struct {
+			ID           int64     `json:"id"`
+			CreatedAt    time.Time `json:"created_at"`
+			Kind         string    `json:"kind"`
+			Amount       int64     `json:"amount"`
+			BalanceAfter int64     `json:"balance_after"`
+			Side         *string   `json:"side"`
+			Quantity     *int64    `json:"quantity"`
+			Price        *int64    `json:"price"`
+			MarketID     *int64    `json:"market_id"`
+			Title        *string   `json:"title"`
+			Artist       *string   `json:"artist"`
+			ChartDate    *string   `json:"chart_date"`
+			BaselineRank *int      `json:"baseline_rank"`
+			Shift        *int      `json:"shift"`
+			Status       *string   `json:"market_status"`
+			Outcome      *string   `json:"outcome"`
+		}
+		rows, err := db.QueryContext(r.Context(), `
+			SELECT l.id, l.created_at, l.kind, l.amount, l.balance_after, l.side, l.quantity, l.price,
+			       m.id, s.title, s.artist, m.chart_date::text, m.baseline_rank, m.shift, m.status, m.outcome
+			FROM ledger_entries l
+			LEFT JOIN markets m ON m.id = l.market_id
+			LEFT JOIN songs s ON s.id = m.song_id
+			WHERE l.user_id = $1
+			ORDER BY l.id DESC
+			LIMIT 500`, userID)
+		if err != nil {
+			log.Printf("me/ledger %d: %v", userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+		entries := []entry{}
+		for rows.Next() {
+			var e entry
+			if err := rows.Scan(&e.ID, &e.CreatedAt, &e.Kind, &e.Amount, &e.BalanceAfter, &e.Side, &e.Quantity, &e.Price,
+				&e.MarketID, &e.Title, &e.Artist, &e.ChartDate, &e.BaselineRank, &e.Shift, &e.Status, &e.Outcome); err != nil {
+				log.Printf("me/ledger %d: %v", userID, err)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			entries = append(entries, e)
+		}
+		if err := rows.Err(); err != nil {
+			log.Printf("me/ledger %d: %v", userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, entries)
+	})
+
 	// Body: {"side": "yes" | "no", "quantity": n}. Returns {"balance": n}.
 	mux.HandleFunc("POST /markets/{id}/buy", trade(db, "buy", Buy))
 	mux.HandleFunc("POST /markets/{id}/sell", trade(db, "sell", Sell))

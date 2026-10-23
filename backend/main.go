@@ -63,57 +63,16 @@ func signedIn(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 
-func routes(db *sql.DB) http.Handler {
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
-	})
-
-	// Returns the signed-in user's ledger account. The first call creates it
-	// with the starting balance.
-	mux.HandleFunc("GET /auth/me", func(w http.ResponseWriter, r *http.Request) {
+// trade handles a signed-in buy or sell of a market's contracts.
+func trade(db *sql.DB, action string,
+	do func(context.Context, *sql.DB, int64, int64, string, int64) (int64, error)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := signedIn(w, r)
 		if !ok {
 			return
 		}
 		if db == nil {
-			http.Error(w, "database not configured", http.StatusServiceUnavailable)
-			return
-		}
-
-		var body struct {
-			UserID      int64  `json:"user_id"`
-			UID         string `json:"uid"`
-			Email       string `json:"email"`
-			Balance     int64  `json:"balance"`
-			RealizedPnL int64  `json:"realized_pnl"`
-		}
-		err := db.QueryRowContext(r.Context(),
-			`SELECT u.id, u.firebase_uid, coalesce(u.email, ''), b.balance, p.realized_pnl
-			 FROM users u
-			 JOIN balances b ON b.user_id = u.id
-			 JOIN user_pnl p ON p.user_id = u.id
-			 WHERE u.id = $1`, userID).Scan(&body.UserID, &body.UID, &body.Email, &body.Balance, &body.RealizedPnL)
-		if err != nil {
-			log.Printf("auth/me %d: %v", userID, err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(body)
-	})
-
-	// Body: {"side": "yes" | "no", "quantity": n}. Returns {"balance": n}.
-	mux.HandleFunc("POST /markets/{id}/buy", func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := signedIn(w, r)
-		if !ok {
-			return
-		}
-		if db == nil {
-			http.Error(w, "database not configured", http.StatusServiceUnavailable)
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
 			return
 		}
 		marketID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -130,23 +89,139 @@ func routes(db *sql.DB) http.Handler {
 			return
 		}
 
-		balance, err := Buy(r.Context(), db, userID, marketID, req.Side, req.Quantity)
+		balance, err := do(r.Context(), db, userID, marketID, req.Side, req.Quantity)
 		switch {
 		case errors.Is(err, ErrInvalidOrder):
 			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		case errors.Is(err, ErrMarketClosed), errors.Is(err, ErrInsufficientFunds):
+		case errors.Is(err, ErrMarketClosed), errors.Is(err, ErrInsufficientFunds), errors.Is(err, ErrNotEnoughContracts):
 			http.Error(w, err.Error(), http.StatusConflict)
-			return
 		case err != nil:
-			log.Printf("buy market %d user %d: %v", marketID, userID, err)
+			log.Printf("%s market %d user %d: %v", action, marketID, userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		default:
+			writeJSON(w, map[string]int64{"balance": balance})
+		}
+	}
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}
+
+func routes(db *sql.DB) http.Handler {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	// Markets the bots opened that still accept trades, by chart date then current rank.
+	// Public: browsing needs no sign-in.
+	mux.HandleFunc("GET /markets", func(w http.ResponseWriter, r *http.Request) {
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		type market struct {
+			ID           int64     `json:"id"`
+			Title        string    `json:"title"`
+			Artist       string    `json:"artist"`
+			ChartDate    string    `json:"chart_date"`
+			BaselineRank int       `json:"baseline_rank"`
+			Shift        int       `json:"shift"`
+			YesPrice     int       `json:"yes_price"`
+			NoPrice      int       `json:"no_price"`
+			ClosesAt     time.Time `json:"closes_at"`
+		}
+		rows, err := db.QueryContext(r.Context(), `
+			SELECT m.id, s.title, s.artist, m.chart_date::text, m.baseline_rank, m.shift,
+			       m.yes_price, $1 - m.yes_price, m.closes_at
+			FROM markets m JOIN songs s ON s.id = m.song_id
+			WHERE m.status = 'open' AND now() < m.closes_at
+			ORDER BY m.chart_date, m.baseline_rank`, ContractPayout)
+		if err != nil {
+			log.Printf("markets: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]int64{"balance": balance})
+		defer rows.Close()
+		markets := []market{}
+		for rows.Next() {
+			var m market
+			if err := rows.Scan(&m.ID, &m.Title, &m.Artist, &m.ChartDate, &m.BaselineRank, &m.Shift,
+				&m.YesPrice, &m.NoPrice, &m.ClosesAt); err != nil {
+				log.Printf("markets: %v", err)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			markets = append(markets, m)
+		}
+		writeJSON(w, markets)
 	})
+
+	// Returns the signed-in user's ledger account and open contracts. The first
+	// call creates the account with the starting balance.
+	mux.HandleFunc("GET /auth/me", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+
+		type position struct {
+			MarketID  int64  `json:"market_id"`
+			Side      string `json:"side"`
+			Quantity  int64  `json:"quantity"`
+			CostBasis int64  `json:"cost_basis"`
+		}
+		var body struct {
+			UserID      int64      `json:"user_id"`
+			UID         string     `json:"uid"`
+			Email       string     `json:"email"`
+			Balance     int64      `json:"balance"`
+			RealizedPnL int64      `json:"realized_pnl"`
+			Positions   []position `json:"positions"`
+		}
+		err := db.QueryRowContext(r.Context(),
+			`SELECT u.id, u.firebase_uid, coalesce(u.email, ''), b.balance, p.realized_pnl
+			 FROM users u
+			 JOIN balances b ON b.user_id = u.id
+			 JOIN user_pnl p ON p.user_id = u.id
+			 WHERE u.id = $1`, userID).Scan(&body.UserID, &body.UID, &body.Email, &body.Balance, &body.RealizedPnL)
+		if err == nil {
+			var rows *sql.Rows
+			rows, err = db.QueryContext(r.Context(),
+				`SELECT market_id, side, quantity, cost_basis FROM positions
+				 WHERE user_id = $1 ORDER BY market_id, side`, userID)
+			if err == nil {
+				body.Positions = []position{}
+				for rows.Next() && err == nil {
+					var p position
+					err = rows.Scan(&p.MarketID, &p.Side, &p.Quantity, &p.CostBasis)
+					body.Positions = append(body.Positions, p)
+				}
+				if err == nil {
+					err = rows.Err()
+				}
+				rows.Close()
+			}
+		}
+		if err != nil {
+			log.Printf("auth/me %d: %v", userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, body)
+	})
+
+	// Body: {"side": "yes" | "no", "quantity": n}. Returns {"balance": n}.
+	mux.HandleFunc("POST /markets/{id}/buy", trade(db, "buy", Buy))
+	mux.HandleFunc("POST /markets/{id}/sell", trade(db, "sell", Sell))
 
 	return mux
 }

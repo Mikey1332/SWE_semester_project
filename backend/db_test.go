@@ -185,7 +185,7 @@ func TestAuthMe(t *testing.T) {
 	signInAs(t, id)
 	res = httptest.NewRecorder()
 	routes(db).ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/auth/me", nil))
-	want := fmt.Sprintf(`{"user_id":%d,"uid":%q,"email":%q,"balance":10000,"realized_pnl":0}`, id, uid, uid+"@example.com")
+	want := fmt.Sprintf(`{"user_id":%d,"uid":%q,"email":%q,"balance":10000,"realized_pnl":0,"positions":[]}`, id, uid, uid+"@example.com")
 	if res.Code != http.StatusOK || strings.TrimSpace(res.Body.String()) != want {
 		t.Fatalf("GET /auth/me: %d %s, want 200 %s", res.Code, res.Body, want)
 	}
@@ -496,4 +496,172 @@ func TestBuyEndpoint(t *testing.T) {
 		}
 	}
 	checkUser(t, db, id, 9_876, 0)
+}
+
+// Selling returns the current price per contract and takes the sold share of
+// the cost basis with it; selling everything closes the position.
+func TestSell(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	marketID, _, _ := newMarket(t, db, 50, 5, 62)
+	id := newUser(t, db)
+
+	if _, err := Buy(ctx, db, id, marketID, "yes", 10); err != nil { // 10 x 62 = 620
+		t.Fatal(err)
+	}
+	balance, err := Sell(ctx, db, id, marketID, "yes", 4) // 4 x 62 = 248
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balance != 9_628 {
+		t.Fatalf("balance after selling 4 = %d, want 9628", balance)
+	}
+	checkUser(t, db, id, 9_628, 0) // same price both ways: break-even
+
+	var quantity, cost int64
+	if err := db.QueryRow(`SELECT quantity, cost_basis FROM positions WHERE user_id = $1 AND market_id = $2`,
+		id, marketID).Scan(&quantity, &cost); err != nil {
+		t.Fatal(err)
+	}
+	if quantity != 6 || cost != 372 {
+		t.Fatalf("position after selling 4: quantity=%d cost_basis=%d, want 6 and 372", quantity, cost)
+	}
+
+	if _, err := Sell(ctx, db, id, marketID, "yes", 7); !errors.Is(err, ErrNotEnoughContracts) {
+		t.Fatalf("selling 7 of 6: got %v, want ErrNotEnoughContracts", err)
+	}
+	if _, err := Sell(ctx, db, id, marketID, "yes", 6); err != nil {
+		t.Fatal(err)
+	}
+	checkUser(t, db, id, StartingBalance, 0)
+
+	var open, sells int
+	if err := db.QueryRow(`
+		SELECT (SELECT count(*) FROM positions WHERE user_id = $1),
+		       (SELECT count(*) FROM ledger_entries WHERE user_id = $1 AND kind = 'sell')`, id).Scan(&open, &sells); err != nil {
+		t.Fatal(err)
+	}
+	if open != 0 || sells != 2 {
+		t.Fatalf("after selling everything: %d positions, %d sell entries; want 0 and 2", open, sells)
+	}
+}
+
+func TestSellRejects(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	marketID, songID, chartDate := newMarket(t, db, 50, 5, 50)
+	id := newUser(t, db)
+	if _, err := Buy(ctx, db, id, marketID, "yes", 5); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, c := range []struct {
+		side     string
+		quantity int64
+		want     error
+	}{
+		{"no", 1, ErrNotEnoughContracts}, // never bought NO
+		{"yes", 0, ErrInvalidOrder},
+		{"yes", -1, ErrInvalidOrder}, // would otherwise debit through a "sale"
+		{"maybe", 1, ErrInvalidOrder},
+	} {
+		if _, err := Sell(ctx, db, id, marketID, c.side, c.quantity); !errors.Is(err, c.want) {
+			t.Fatalf("Sell(%q, %d): got %v, want %v", c.side, c.quantity, err, c.want)
+		}
+	}
+
+	addRank(t, db, songID, chartDate, 40)
+	fillChart(t, db, chartDate)
+	if err := Resolve(ctx, db, marketID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Sell(ctx, db, id, marketID, "yes", 1); !errors.Is(err, ErrMarketClosed) {
+		t.Fatalf("sell after resolution: got %v, want ErrMarketClosed", err)
+	}
+}
+
+// The sell endpoint works for the signed-in user and /auth/me shows what they hold.
+func TestSellEndpointAndPositions(t *testing.T) {
+	db := testDB(t)
+	marketID, _, _ := newMarket(t, db, 50, 5, 62)
+	id := newUser(t, db)
+	signInAs(t, id)
+
+	post := func(action, body string) *httptest.ResponseRecorder {
+		res := httptest.NewRecorder()
+		routes(db).ServeHTTP(res, httptest.NewRequest(http.MethodPost,
+			fmt.Sprintf("/markets/%d/%s", marketID, action), strings.NewReader(body)))
+		return res
+	}
+	if res := post("buy", `{"side":"no","quantity":10}`); res.Code != http.StatusOK { // 10 x 38
+		t.Fatalf("buy: %d %s", res.Code, res.Body)
+	}
+	if res := post("sell", `{"side":"no","quantity":3}`); res.Code != http.StatusOK || strings.TrimSpace(res.Body.String()) != `{"balance":9734}` {
+		t.Fatalf("sell: %d %s, want 200 {\"balance\":9734}", res.Code, res.Body)
+	}
+	if res := post("sell", `{"side":"no","quantity":8}`); res.Code != http.StatusConflict {
+		t.Fatalf("oversell: got %d, want 409", res.Code)
+	}
+
+	res := httptest.NewRecorder()
+	routes(db).ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/auth/me", nil))
+	var me struct {
+		Positions []struct {
+			MarketID  int64  `json:"market_id"`
+			Side      string `json:"side"`
+			Quantity  int64  `json:"quantity"`
+			CostBasis int64  `json:"cost_basis"`
+		} `json:"positions"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &me); err != nil {
+		t.Fatal(err)
+	}
+	if len(me.Positions) != 1 || me.Positions[0].MarketID != marketID || me.Positions[0].Side != "no" ||
+		me.Positions[0].Quantity != 7 || me.Positions[0].CostBasis != 266 {
+		t.Fatalf("positions = %+v, want one NO position of 7 costing 266 in market %d", me.Positions, marketID)
+	}
+}
+
+// GET /markets lists tradeable markets with both prices and hides closed ones.
+func TestMarketsList(t *testing.T) {
+	db := testDB(t)
+	openID, songID, _ := newMarket(t, db, 50, 5, 62)
+	closedID, _, _ := newMarket(t, db, 40, -3, 30)
+	if _, err := db.Exec(`UPDATE markets SET closes_at = now() - interval '1 second' WHERE id = $1`, closedID); err != nil {
+		t.Fatal(err)
+	}
+
+	res := httptest.NewRecorder()
+	routes(db).ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/markets", nil))
+	var markets []struct {
+		ID           int64  `json:"id"`
+		Title        string `json:"title"`
+		BaselineRank int    `json:"baseline_rank"`
+		Shift        int    `json:"shift"`
+		YesPrice     int    `json:"yes_price"`
+		NoPrice      int    `json:"no_price"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &markets); err != nil || res.Code != http.StatusOK {
+		t.Fatalf("GET /markets: %d %s", res.Code, res.Body)
+	}
+
+	var title string
+	if err := db.QueryRow(`SELECT title FROM songs WHERE id = $1`, songID).Scan(&title); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range markets {
+		if m.ID == closedID {
+			t.Fatalf("closed market %d was listed", closedID)
+		}
+		if m.ID == openID {
+			found = true
+			if m.Title != title || m.BaselineRank != 50 || m.Shift != 5 || m.YesPrice != 62 || m.NoPrice != 38 {
+				t.Fatalf("market = %+v, want %q #50 shift 5 YES 62 NO 38", m, title)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("open market %d not listed", openID)
+	}
 }

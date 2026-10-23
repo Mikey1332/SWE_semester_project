@@ -1732,3 +1732,95 @@ footer {
 html {
   scrollbar-gutter:stable;
 }
+
+/* Live markets: real markets from the backend, traded with Music Notes */
+.live-list {
+  display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));
+  gap:16px
+}
+.live-market {
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:9px;
+  padding:18px;
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+  min-width:0
+}
+.live-song {
+  display:flex;
+  flex-direction:column;
+  gap:3px
+}
+.live-song strong {
+  font-size:15px;
+  font-weight:600;
+  overflow-wrap:anywhere
+}
+.live-song span,
+.live-meta {
+  font-size:11px;
+  color:var(--muted)
+}
+.live-question {
+  font-size:13px;
+  line-height:1.5;
+  margin:0
+}
+.live-sides>button {
+  border:1px solid transparent;
+  opacity:.65
+}
+.live-sides>button.chosen {
+  opacity:1;
+  border-color:currentColor
+}
+.live-order {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:end;
+  gap:9px
+}
+.live-order label {
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  font-size:10px;
+  color:var(--muted)
+}
+.live-order input {
+  width:86px;
+  padding:10px;
+  border:1px solid var(--line);
+  border-radius:6px;
+  font:inherit;
+  font-size:13px;
+  color:var(--foreground);
+  background:var(--background)
+}
+.live-total {
+  flex:1;
+  font-size:13px;
+  font-weight:600;
+  padding-bottom:11px;
+  min-width:60px
+}
+.live-order .primary:disabled {
+  opacity:.4;
+  cursor:not-allowed
+}
+.live-meta {
+  margin:0
+}
+.live-empty {
+  font-size:13px;
+  color:var(--muted);
+  padding:18px;
+  border:1px dashed var(--line);
+  border-radius:9px
+}
+.live-more {
+  margin-top:18px
+}

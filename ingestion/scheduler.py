@@ -13,7 +13,7 @@ def update_charts():
 
 
 def main():
-    print("[SCHEDULER RUNNING]")
+    print("[SCHEDULER RUNNING]\n")
 
     # Run once when the scheduler starts.
     update_charts()
@@ -28,7 +28,7 @@ def main():
             # Wait 30 secs before checking again
             time.sleep(30)
     except KeyboardInterrupt:
-        print("\nScheduler stopped.")
+        print("\n[SCHEDULER STOPPED]")
 
 
 if __name__ == "__main__":

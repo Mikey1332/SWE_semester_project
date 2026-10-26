@@ -1,12 +1,22 @@
 from datetime import date
+from ingestion.objects.Song import Song
+from ingestion.objects.Snapshot import Snapshot
+
+CHART_SIZES = {
+    "hot-100": 100,
+    "country-songs": 50,
+    "rock-songs": 50,
+    "pop-songs": 40,
+    "r-b-hip-hop-songs": 50,
+}
 
 def validate_song(song):
-    if not isinstance(song, dict):
+    if not isinstance(song, Song):
         return False
 
-    title = song.get("title")
-    artist = song.get("artist")
-    rank = song.get("rank")
+    title = song.title
+    artist = song.artist
+    rank = song.rank
 
     return (
         isinstance(title, str)
@@ -17,56 +27,61 @@ def validate_song(song):
         and 1 <= rank <= 100
     )
 
+
 def validate_snapshot(snapshot):
-    #Check Snapshot is dictionary
-    if not isinstance(snapshot, dict):
-        raise ValueError("Snapshot must be a dictionary.")
+    # Check snapshot is a Snapshot object
+    if not isinstance(snapshot, Snapshot):
+        raise ValueError("Snapshot must be a Snapshot object.")
 
-    #Check Snapshot is Hot-100
-    if snapshot.get("chart_name", "hot-100") != "hot-100":
-        raise ValueError("Only Hot 100 snapshots are supported.")
+    # Check chart is supported
+    if snapshot.chart_name not in CHART_SIZES:
+        raise ValueError("Chart is not supported.")
 
-    #Check Date is string
-    chart_date = snapshot.get("chart_date")
+    expected_size = CHART_SIZES[snapshot.chart_name]
+
+    # Check date is a string
+    chart_date = snapshot.chart_date
     if not isinstance(chart_date, str):
         raise ValueError("Chart date must be a YYYY-MM-DD string.")
 
-    #Check Date is valid date
+    # Check date is valid
     try:
         parsed_date = date.fromisoformat(chart_date)
     except ValueError as error:
         raise ValueError("Invalid chart date.") from error
 
-    #Check Date is valid format
+    # Check date uses the correct format
     if parsed_date.isoformat() != chart_date:
         raise ValueError("Chart date must use YYYY-MM-DD format.")
 
-    #Check songs are a list of size 100
-    songs = snapshot.get("songs")
-    if not isinstance(songs, list) or len(songs) != 100:
-        raise ValueError("Expected 100 songs.")
+    # Check songs are a list of the expected size
+    songs = snapshot.songs
+    if not isinstance(songs, list) or len(songs) != expected_size:
+        raise ValueError("Expected " + str(expected_size) + " songs. Got " + str(len(songs)) + " songs.")
 
-    #Check if song is invalid
+    # Check each song is valid
     for song in songs:
         if not validate_song(song):
             raise ValueError("Snapshot contains invalid song data.")
 
-    #Check if songs' ranks are valid and unique
-    rank = set()
-    for song in songs:
-        rank.add(song["rank"])
-        if song["rank"] < 1 or song["rank"] > 100:
-            raise ValueError("Expected ranks from 1 to 100.")
+        if song.rank > expected_size:
+            raise ValueError("Rank exceeds the chart size.")
 
-    if len(songs) != len(rank):
+    # Check ranks are unique
+    ranks = set()
+
+    for song in songs:
+        ranks.add(song.rank)
+
+    if len(songs) != len(ranks):
         raise ValueError("Expected ranks to be unique.")
 
-    # Check if each song is unique
+    # Check each song is unique
     identities = set()
 
     for song in songs:
-        title = song["title"].strip().lower()
-        artist = song["artist"].strip().lower()
+        title = song.title.strip().lower()
+        artist = song.artist.strip().lower()
         identities.add((title, artist))
 
     if len(songs) != len(identities):

@@ -8,8 +8,8 @@ def save_snapshot(snapshot):
     #Check the data before saving
     validation.validate_snapshot(snapshot)
 
-    chart_date = date.fromisoformat(snapshot["chart_date"])
-    songs = snapshot["songs"]
+    chart_date = date.fromisoformat(snapshot.chart_date)
+    songs = snapshot.songs
 
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
@@ -18,9 +18,9 @@ def save_snapshot(snapshot):
     with psycopg.connect(database_url, connect_timeout=10) as connection:
         with connection.cursor() as cursor:
             for song in songs:
-                title = song["title"]
-                artist = song["artist"]
-                rank = song["rank"]
+                title = song.title
+                artist = song.artist
+                rank = song.rank
 
                 #Add the song, or get its ID if it already exists
                 query = "INSERT INTO songs (title, artist) VALUES (%s, %s) ON CONFLICT (title, artist) DO UPDATE SET title = EXCLUDED.title RETURNING id"

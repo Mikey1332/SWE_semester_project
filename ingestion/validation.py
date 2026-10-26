@@ -4,9 +4,9 @@ def validate_song(song):
     if not isinstance(song, dict):
         return False
 
-    title = song.get("title")
-    artist = song.get("artist")
-    rank = song.get("rank")
+    title = song.title
+    artist = song.artist
+    rank = song.rank
 
     return (
         isinstance(title, str)

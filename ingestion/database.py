@@ -2,8 +2,6 @@ import os
 from datetime import date
 import psycopg
 from ingestion import validation
-from ingestion.objects.Song import Song
-from ingestion.objects.Snapshot import Snapshot
 
 
 def save_snapshot(snapshot):

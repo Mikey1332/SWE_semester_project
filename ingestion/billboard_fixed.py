@@ -332,8 +332,21 @@ class ChartData:
 
     def _parseNewStylePage(self, soup):
         dateElement = soup.select_one("#chart-date-picker")
-        if dateElement:
-            self.date = dateElement["data-date"]
+        chartRows = soup.select("ul.o-chart-results-list-row")
+
+        if dateElement is None or not chartRows:
+            raise BillboardParseException(
+                "Billboard did not return chart data. "
+                "The page may require browser loading or authorized access."
+            )
+
+        chartDate = dateElement.get("data-date")
+        if not chartDate:
+            raise BillboardParseException(
+                "Billboard returned no chart date."
+            )
+
+        self.date = chartDate
 
         # TODO: Fix these, if possible. These used to be exposed directly in the
         # HTML. There were tests for these, removed in

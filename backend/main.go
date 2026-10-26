@@ -134,10 +134,21 @@ func routes(db *sql.DB) http.Handler {
 			YesPrice     int       `json:"yes_price"`
 			NoPrice      int       `json:"no_price"`
 			ClosesAt     time.Time `json:"closes_at"`
+			// Contracts bought so far, and the song's last 10 Hot 100 ranks
+			// (oldest first) up to the chart the market starts from.
+			Volume  int64           `json:"volume"`
+			History json.RawMessage `json:"history"`
 		}
 		rows, err := db.QueryContext(r.Context(), `
 			SELECT m.id, s.title, s.artist, m.chart_date::text, m.baseline_rank, m.shift,
-			       m.yes_price, $1 - m.yes_price, m.closes_at
+			       m.yes_price, $1 - m.yes_price, m.closes_at,
+			       coalesce((SELECT sum(l.quantity) FROM ledger_entries l
+			                 WHERE l.market_id = m.id AND l.kind = 'buy'), 0),
+			       coalesce((SELECT json_agg(json_build_object('chart_date', h.chart_date::text, 'rank', h.rank)
+			                                 ORDER BY h.chart_date)
+			                 FROM (SELECT chart_date, rank FROM chart_snapshots c
+			                       WHERE c.song_id = m.song_id AND c.chart_date < m.chart_date
+			                       ORDER BY c.chart_date DESC LIMIT 10) h), '[]')
 			FROM markets m JOIN songs s ON s.id = m.song_id
 			WHERE m.status = 'open' AND now() < m.closes_at
 			ORDER BY m.chart_date, m.baseline_rank`, ContractPayout)
@@ -151,7 +162,7 @@ func routes(db *sql.DB) http.Handler {
 		for rows.Next() {
 			var m market
 			if err := rows.Scan(&m.ID, &m.Title, &m.Artist, &m.ChartDate, &m.BaselineRank, &m.Shift,
-				&m.YesPrice, &m.NoPrice, &m.ClosesAt); err != nil {
+				&m.YesPrice, &m.NoPrice, &m.ClosesAt, &m.Volume, &m.History); err != nil {
 				log.Printf("markets: %v", err)
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return

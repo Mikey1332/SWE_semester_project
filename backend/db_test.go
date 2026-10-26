@@ -625,8 +625,19 @@ func TestSellEndpointAndPositions(t *testing.T) {
 // GET /markets lists tradeable markets with both prices and hides closed ones.
 func TestMarketsList(t *testing.T) {
 	db := testDB(t)
-	openID, songID, _ := newMarket(t, db, 50, 5, 62)
+	openID, songID, chartDate := newMarket(t, db, 50, 5, 62)
 	closedID, _, _ := newMarket(t, db, 40, -3, 30)
+	day, err := time.Parse(time.DateOnly, chartDate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	twoWeeksBack, lastWeek := day.AddDate(0, 0, -14).Format(time.DateOnly), day.AddDate(0, 0, -7).Format(time.DateOnly)
+	addRank(t, db, songID, twoWeeksBack, 55)
+	addRank(t, db, songID, lastWeek, 50)
+	addRank(t, db, songID, chartDate, 44) // the market's own chart must not leak into its history
+	if _, err := Buy(context.Background(), db, newUser(t, db), openID, "yes", 3); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.Exec(`UPDATE markets SET closes_at = now() - interval '1 second' WHERE id = $1`, closedID); err != nil {
 		t.Fatal(err)
 	}
@@ -640,6 +651,11 @@ func TestMarketsList(t *testing.T) {
 		Shift        int    `json:"shift"`
 		YesPrice     int    `json:"yes_price"`
 		NoPrice      int    `json:"no_price"`
+		Volume       int64  `json:"volume"`
+		History      []struct {
+			ChartDate string `json:"chart_date"`
+			Rank      int    `json:"rank"`
+		} `json:"history"`
 	}
 	if err := json.Unmarshal(res.Body.Bytes(), &markets); err != nil || res.Code != http.StatusOK {
 		t.Fatalf("GET /markets: %d %s", res.Code, res.Body)
@@ -656,8 +672,12 @@ func TestMarketsList(t *testing.T) {
 		}
 		if m.ID == openID {
 			found = true
-			if m.Title != title || m.BaselineRank != 50 || m.Shift != 5 || m.YesPrice != 62 || m.NoPrice != 38 {
-				t.Fatalf("market = %+v, want %q #50 shift 5 YES 62 NO 38", m, title)
+			if m.Title != title || m.BaselineRank != 50 || m.Shift != 5 || m.YesPrice != 62 || m.NoPrice != 38 || m.Volume != 3 {
+				t.Fatalf("market = %+v, want %q #50 shift 5 YES 62 NO 38 volume 3", m, title)
+			}
+			if len(m.History) != 2 || m.History[0].ChartDate != twoWeeksBack || m.History[0].Rank != 55 ||
+				m.History[1].ChartDate != lastWeek || m.History[1].Rank != 50 {
+				t.Fatalf("history = %+v, want #55 on %s then #50 on %s", m.History, twoWeeksBack, lastWeek)
 			}
 		}
 	}

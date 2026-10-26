@@ -21,7 +21,7 @@ async function load(user: User): Promise<Loaded> {
 function question(e: LedgerEntry): string {
     if (e.title === null || e.shift === null || e.baseline_rank === null || e.chart_date === null)
         return "";
-    return marketQuestion({ id: e.market_id ?? 0, title: e.title, artist: e.artist ?? "", chart_date: e.chart_date, baseline_rank: e.baseline_rank, shift: e.shift, yes_price: 0, no_price: 0, closes_at: "" });
+    return marketQuestion({ title: e.title, chart_date: e.chart_date, baseline_rank: e.baseline_rank, shift: e.shift });
 }
 
 // The signed-in user's Music Note ledger: every buy, sell and payout with the
@@ -52,7 +52,7 @@ export function LedgerView({ user, onSignUp }: { user: User | null; onSignUp: ()
       <div className="filters ledger-filters" role="group" aria-label="Filter ledger entries">{FILTERS.map(([label, kind]) => <button key={label} aria-pressed={filter === kind} className={filter === kind ? "active" : ""} onClick={() => setFilter(kind)}>{label}</button>)}</div>
       {loaded === null ? <p className="live-empty">Loading your ledger…</p>
         : "error" in loaded ? <p className="live-empty">{loaded.error}</p>
-        : !shown.length ? <p className="live-empty">{filter ? "Nothing here yet." : "No entries yet. Buy contracts in Live markets on the Discover tab."}</p>
+        : !shown.length ? <p className="live-empty">{filter ? "Nothing here yet." : "No entries yet. Buy contracts on the Discover tab."}</p>
         : <div className="ledger-table-wrap"><table className="ledger-table">
           <thead><tr><th>Date</th><th>Activity</th><th>Song</th><th>Side</th><th className="num">Contracts</th><th className="num">Price</th><th className="num">Notes</th><th className="num">Balance</th><th>Result</th></tr></thead>
           <tbody>{shown.map(e => {

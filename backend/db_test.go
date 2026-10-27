@@ -17,9 +17,13 @@ import (
 )
 
 func testDB(t *testing.T) *sql.DB {
-	url := os.Getenv("DATABASE_URL")
+	t.Helper()
+	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
-		t.Skip("DATABASE_URL not set")
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	if url == os.Getenv("DATABASE_URL") {
+		t.Fatal("TEST_DATABASE_URL must differ from DATABASE_URL")
 	}
 	db, err := sql.Open("pgx", url)
 	if err != nil {
@@ -28,12 +32,34 @@ func testDB(t *testing.T) *sql.DB {
 	t.Cleanup(func() { db.Close() })
 
 	ctx := context.Background()
+	var name string
+	if err := db.QueryRowContext(ctx, `SELECT current_database()`).Scan(&name); err != nil {
+		t.Fatalf("connect to test database: %v", err)
+	}
+	if !testDatabaseName(name) {
+		t.Fatalf("refusing database %q: its name must contain test", name)
+	}
 	for range 2 { // second run must be a no-op
 		if err := Migrate(ctx, db); err != nil {
 			t.Fatalf("migrate: %v", err)
 		}
 	}
 	return db
+}
+
+func testDatabaseName(name string) bool {
+	return strings.Contains(strings.ToLower(name), "test")
+}
+
+func TestTestDatabaseName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{{"octave_test", true}, {"TEST_db", true}, {"octave", false}, {"", false}} {
+		if got := testDatabaseName(tc.name); got != tc.want {
+			t.Errorf("testDatabaseName(%q) = %t, want %t", tc.name, got, tc.want)
+		}
+	}
 }
 
 // unique returns a name no other test run has used.

@@ -96,25 +96,12 @@ Open http://localhost:8080/health; expect `{"status":"ok"}`. Stop with Ctrl+C.
 
 Checks from `backend/`:
 
-Database integration tests write synthetic data and run migrations. Create a separate
-test database and set its URL before running them (adjust the connection settings
-to match your PostgreSQL installation):
-
-```bash
-psql "$DATABASE_URL" -c 'CREATE DATABASE octave_test;'
-export TEST_DATABASE_URL='postgres://postgres:postgres@localhost:5432/octave_test?sslmode=disable'
-```
-
-The test database name must contain `test`, and `TEST_DATABASE_URL` must differ
-from `DATABASE_URL`. Tests leave their data in the test database. Without
-`TEST_DATABASE_URL`, database integration tests skip; other tests still run.
-
 ```bash
 go vet ./...
 go test ./...
 ```
 
-Without `DATABASE_URL`, the server skips database setup. The health endpoint alone does not verify the database connection.
+Without `DATABASE_URL`, the server skips database setup and database tests are skipped. The health endpoint alone does not verify the database connection.
 
 ### Frontend
 
@@ -174,7 +161,7 @@ python -m pip install flake8 pytest
 With PostgreSQL running, migrations applied, and `DATABASE_URL` set, run:
 
 ```bash
-python -m ingestion.run_ingestion
+python -m ingestion.main
 ```
 
 This fetches the Hot 100, validates it, and saves songs and dated rankings to PostgreSQL. Repeating an unchanged snapshot does not create duplicate snapshot entries.

@@ -109,6 +109,28 @@ func writeJSON(w http.ResponseWriter, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// serveLeaderboard answers ?period=week|month|all (default week) with the top 100.
+func serveLeaderboard(w http.ResponseWriter, r *http.Request, db *sql.DB, groupID *int64) {
+	if db == nil {
+		http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	period := r.URL.Query().Get("period")
+	if period == "" {
+		period = "week"
+	}
+	board, err := Leaderboard(r.Context(), db, period, groupID)
+	switch {
+	case errors.Is(err, ErrInvalidPeriod):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case err != nil:
+		log.Printf("leaderboard: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	default:
+		writeJSON(w, board[:min(len(board), 100)])
+	}
+}
+
 func routes(db *sql.DB) http.Handler {
 	mux := http.NewServeMux()
 
@@ -138,6 +160,8 @@ func routes(db *sql.DB) http.Handler {
 			// (oldest first) up to the chart the market starts from.
 			Volume  int64           `json:"volume"`
 			History json.RawMessage `json:"history"`
+			// Billboard genre charts the song has appeared on, e.g. "rock-songs".
+			Genres json.RawMessage `json:"genres"`
 		}
 		rows, err := db.QueryContext(r.Context(), `
 			SELECT m.id, s.title, s.artist, m.chart_date::text, m.baseline_rank, m.shift,
@@ -147,8 +171,10 @@ func routes(db *sql.DB) http.Handler {
 			       coalesce((SELECT json_agg(json_build_object('chart_date', h.chart_date::text, 'rank', h.rank)
 			                                 ORDER BY h.chart_date)
 			                 FROM (SELECT chart_date, rank FROM chart_snapshots c
-			                       WHERE c.song_id = m.song_id AND c.chart_date < m.chart_date
-			                       ORDER BY c.chart_date DESC LIMIT 10) h), '[]')
+			                       WHERE c.chart = 'hot-100' AND c.song_id = m.song_id AND c.chart_date < m.chart_date
+			                       ORDER BY c.chart_date DESC LIMIT 10) h), '[]'),
+			       coalesce((SELECT json_agg(DISTINCT c.chart) FROM chart_snapshots c
+			                 WHERE c.song_id = m.song_id AND c.chart <> 'hot-100'), '[]')
 			FROM markets m JOIN songs s ON s.id = m.song_id
 			WHERE m.status = 'open' AND now() < m.closes_at
 			ORDER BY m.chart_date, m.baseline_rank`, ContractPayout)
@@ -162,7 +188,7 @@ func routes(db *sql.DB) http.Handler {
 		for rows.Next() {
 			var m market
 			if err := rows.Scan(&m.ID, &m.Title, &m.Artist, &m.ChartDate, &m.BaselineRank, &m.Shift,
-				&m.YesPrice, &m.NoPrice, &m.ClosesAt, &m.Volume, &m.History); err != nil {
+				&m.YesPrice, &m.NoPrice, &m.ClosesAt, &m.Volume, &m.History, &m.Genres); err != nil {
 				log.Printf("markets: %v", err)
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
@@ -296,6 +322,67 @@ func routes(db *sql.DB) http.Handler {
 	// Body: {"side": "yes" | "no", "quantity": n}. Returns {"balance": n}.
 	mux.HandleFunc("POST /markets/{id}/buy", trade(db, "buy", Buy))
 	mux.HandleFunc("POST /markets/{id}/sell", trade(db, "sell", Sell))
+	// Credits the weekly grant to the signed-in user. Returns {"balance": n}.
+	mux.HandleFunc("POST /me/weekly-grant", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		balance, err := ClaimWeeklyGrant(r.Context(), db, userID)
+		switch {
+		case errors.Is(err, ErrGrantNotReady):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case err != nil:
+			log.Printf("weekly grant user %d: %v", userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		default:
+			writeJSON(w, map[string]int64{"balance": balance})
+		}
+	})
+
+	// ?period=week|month|all (default week). Public.
+	mux.HandleFunc("GET /leaderboard", func(w http.ResponseWriter, r *http.Request) {
+		serveLeaderboard(w, r, db, nil)
+	})
+	mux.HandleFunc("GET /groups/{id}/leaderboard", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid group id", http.StatusBadRequest)
+			return
+		}
+		serveLeaderboard(w, r, db, &id)
+	})
+	// Adds the signed-in user to a group. 204 on success.
+	mux.HandleFunc("POST /groups/{id}/join", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid group id", http.StatusBadRequest)
+			return
+		}
+		switch err := JoinGroup(r.Context(), db, userID, id); {
+		case errors.Is(err, ErrNoSuchGroup):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, ErrAlreadyMember):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case err != nil:
+			log.Printf("join group %d user %d: %v", id, userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
 
 	return mux
 }

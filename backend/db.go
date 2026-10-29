@@ -13,11 +13,13 @@ import (
 
 const (
 	StartingBalance = 10_000
-	ContractPayout  = 100 // Music Notes paid per winning contract
-	ChartSize       = 100 // Billboard Hot 100; a chart with fewer rows is still loading
+	WeeklyGrant     = 1_000 // Music Notes per weekly claim
+	ContractPayout  = 100   // Music Notes paid per winning contract
+	ChartSize       = 100   // Billboard Hot 100; a chart with fewer rows is still loading
 )
 
 var (
+	ErrGrantNotReady      = errors.New("weekly grant already claimed this week")
 	ErrInsufficientFunds  = errors.New("insufficient Music Notes")
 	ErrInvalidOrder       = errors.New("side must be yes or no and quantity between 1 and 1,000,000")
 	ErrMarketClosed       = errors.New("market is not open")
@@ -251,7 +253,7 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 
 	var loaded int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT count(*) FROM chart_snapshots WHERE chart_date = $1`, chartDate).Scan(&loaded); err != nil {
+		`SELECT count(*) FROM chart_snapshots WHERE chart = 'hot-100' AND chart_date = $1`, chartDate).Scan(&loaded); err != nil {
 		return err
 	}
 	if loaded < ChartSize {
@@ -260,7 +262,7 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 
 	var rank int64
 	err = tx.QueryRowContext(ctx,
-		`SELECT rank FROM chart_snapshots WHERE song_id = $1 AND chart_date = $2`, songID, chartDate).Scan(&rank)
+		`SELECT rank FROM chart_snapshots WHERE chart = 'hot-100' AND song_id = $1 AND chart_date = $2`, songID, chartDate).Scan(&rank)
 	if errors.Is(err, sql.ErrNoRows) {
 		rank = ChartSize + 1 // dropped off the chart
 	} else if err != nil {
@@ -341,4 +343,33 @@ func UserForFirebase(ctx context.Context, db *sql.DB, firebaseUID, email string)
 		return 0, err
 	}
 	return id, tx.Commit()
+}
+
+// ClaimWeeklyGrant credits WeeklyGrant if the user's last grant (the sign-up grant
+// counts) is at least 7 days old, returning the new balance.
+func ClaimWeeklyGrant(ctx context.Context, db *sql.DB, userID int64) (int64, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	// Lock the balance row so two claims at once can't both pass the check below.
+	if _, err := tx.ExecContext(ctx, `SELECT 1 FROM balances WHERE user_id = $1 FOR UPDATE`, userID); err != nil {
+		return 0, err
+	}
+	var recent bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT coalesce(max(created_at) > now() - interval '7 days', false)
+		FROM ledger_entries WHERE user_id = $1 AND kind = 'grant'`, userID).Scan(&recent); err != nil {
+		return 0, err
+	}
+	if recent {
+		return 0, ErrGrantNotReady
+	}
+	balance, err := Post(ctx, tx, Entry{UserID: userID, Amount: WeeklyGrant, Kind: "grant"})
+	if err != nil {
+		return 0, err
+	}
+	return balance, tx.Commit()
 }

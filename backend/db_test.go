@@ -311,7 +311,7 @@ func fillChart(t *testing.T, db *sql.DB, chartDate string) {
 	_, err := db.Exec(`
 		WITH free AS (
 			SELECT g AS rank FROM generate_series(1, $3::int) g
-			WHERE g NOT IN (SELECT rank FROM chart_snapshots WHERE chart_date = $1)
+			WHERE g NOT IN (SELECT rank FROM chart_snapshots WHERE chart = 'hot-100' AND chart_date = $1)
 		), filler AS (
 			INSERT INTO songs (title, artist) SELECT $2 || rank, 'Filler' FROM free RETURNING id, title
 		)
@@ -752,4 +752,350 @@ func TestMyLedger(t *testing.T) {
 			t.Fatalf("entry %d = %+v, want %s %+d (balance %d) of %d YES at %d in resolved market %d", i, e, w.kind, w.amount, w.after, w.qty, w.price, marketID)
 		}
 	}
+}
+
+// resolvedMarket inserts a settled market whose chart was dated daysAgo.
+func resolvedMarket(t *testing.T, db *sql.DB, daysAgo int) int64 {
+	t.Helper()
+	var id int64
+	if err := db.QueryRow(`
+		INSERT INTO markets (song_id, chart_date, baseline_rank, shift, yes_price, closes_at, status, outcome)
+		VALUES ($1, current_date - $2::int, 50, 5, 50, now() - interval '1 day', 'resolved', 'yes')
+		RETURNING id`, newSong(t, db), daysAgo).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// earn records a gain (payout) or loss (buy) of amount for userID in a market.
+func earn(t *testing.T, db *sql.DB, userID, marketID, amount int64) {
+	t.Helper()
+	kind := "payout"
+	if amount < 0 {
+		kind = "buy"
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := Post(context.Background(), tx, Entry{UserID: userID, Amount: amount, Kind: kind, MarketID: &marketID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// T15: weekly, monthly and all-time rankings use only results from their period.
+func TestT15LeaderboardPeriods(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	a, b := newUser(t, db), newUser(t, db)
+	thisWeek, earlierThisMonth, lastYear := resolvedMarket(t, db, 2), resolvedMarket(t, db, 20), resolvedMarket(t, db, 200)
+	earn(t, db, a, thisWeek, 100) // A: week +100, month +400, all +1000
+	earn(t, db, a, earlierThisMonth, 300)
+	earn(t, db, a, lastYear, 600)
+	earn(t, db, b, thisWeek, 500) // B: week +500, month -200, all +1500
+	earn(t, db, b, earlierThisMonth, -700)
+	earn(t, db, b, lastYear, 1700)
+
+	for _, c := range []struct {
+		period     string
+		aPnL, bPnL int64
+		bAhead     bool
+	}{
+		{"week", 100, 500, true},
+		{"month", 400, -200, false},
+		{"all", 1000, 1500, true},
+	} {
+		board, err := Leaderboard(ctx, db, c.period, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[int64]LeaderboardRow{}
+		for _, r := range board {
+			if r.UserID == a || r.UserID == b {
+				got[r.UserID] = r
+			}
+		}
+		if got[a].PnL != c.aPnL || got[b].PnL != c.bPnL || (got[b].Rank < got[a].Rank) != c.bAhead {
+			t.Fatalf("%s: A=%+v B=%+v, want A %d, B %d, B ahead %v", c.period, got[a], got[b], c.aPnL, c.bPnL, c.bAhead)
+		}
+	}
+	if _, err := Leaderboard(ctx, db, "decade", nil); !errors.Is(err, ErrInvalidPeriod) {
+		t.Fatalf("unknown period: got %v, want ErrInvalidPeriod", err)
+	}
+}
+
+// T19 + T20: a user joins a group once, and the group leaderboard ranks only its members.
+func TestT19T20GroupsAndGroupLeaderboard(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	group, err := CreateGroup(ctx, db, unique("group"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, outsider := newUser(t, db), newUser(t, db)
+
+	if err := JoinGroup(ctx, db, member, group); err != nil { // T19
+		t.Fatal(err)
+	}
+	if err := JoinGroup(ctx, db, member, group); !errors.Is(err, ErrAlreadyMember) {
+		t.Fatalf("joining twice: got %v, want ErrAlreadyMember", err)
+	}
+	if err := JoinGroup(ctx, db, member, -1); !errors.Is(err, ErrNoSuchGroup) {
+		t.Fatalf("missing group: got %v, want ErrNoSuchGroup", err)
+	}
+
+	m := resolvedMarket(t, db, 1)
+	earn(t, db, member, m, 250)
+	earn(t, db, outsider, m, 900) // more P&L, but not in the group
+
+	board, err := Leaderboard(ctx, db, "week", &group) // T20
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(board) != 1 || board[0].UserID != member || board[0].PnL != 250 || board[0].Rank != 1 {
+		t.Fatalf("group leaderboard = %+v, want only the member, ranked 1 with +250", board)
+	}
+}
+
+// T4: realized P&L reports the gain or loss on a settled contract.
+func TestT4PortfolioGainAndLoss(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	marketID, songID, chartDate := newMarket(t, db, 50, 5, 50) // YES and NO both cost 50
+	winner, loser := newUser(t, db), newUser(t, db)
+
+	if _, err := Buy(ctx, db, winner, marketID, "yes", 2); err != nil { // spends 100
+		t.Fatal(err)
+	}
+	if _, err := Buy(ctx, db, loser, marketID, "no", 2); err != nil { // spends 100
+		t.Fatal(err)
+	}
+	addRank(t, db, songID, chartDate, 40) // rose 10 spots: YES wins
+	fillChart(t, db, chartDate)
+	if err := Resolve(ctx, db, marketID); err != nil {
+		t.Fatal(err)
+	}
+	checkUser(t, db, winner, 10_100, 100) // paid 100 won 2 x 100
+	checkUser(t, db, loser, 9_900, -100)  // paid 100 won nothing
+}
+
+// T10: selling 5 of 10 contracts returns 5 x price and keeps the other 5.
+func TestT10SellFiveContracts(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	marketID, _, _ := newMarket(t, db, 50, 5, 50)
+	id := newUser(t, db)
+
+	if _, err := Buy(ctx, db, id, marketID, "yes", 10); err != nil { // -500
+		t.Fatal(err)
+	}
+	balance, err := Sell(ctx, db, id, marketID, "yes", 5) // +250
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balance != 9_750 {
+		t.Fatalf("balance after selling 5 = %d, want 9750", balance)
+	}
+
+	var held, cost, soldQty, soldPrice int64
+	if err := db.QueryRow(`SELECT quantity, cost_basis FROM positions WHERE user_id = $1 AND market_id = $2`, id, marketID).Scan(&held, &cost); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT quantity, price FROM ledger_entries WHERE user_id = $1 AND kind = 'sell'`, id).Scan(&soldQty, &soldPrice); err != nil {
+		t.Fatal(err)
+	}
+	if held != 5 || cost != 250 || soldQty != 5 || soldPrice != 50 {
+		t.Fatalf("held %d (cost %d), sold %d at %d; want 5 (250), 5 at 50", held, cost, soldQty, soldPrice)
+	}
+	checkUser(t, db, id, 9_750, 0) // same price both ways: break-even
+}
+
+// T16: the bots run the moment they start (as main does), not 15 minutes later.
+func TestT16BotsRunOnStart(t *testing.T) {
+	db := testDB(t)
+	marketID, songID, chartDate := newMarket(t, db, 50, 5, 50)
+	addRank(t, db, songID, chartDate, 44)
+	fillChart(t, db, chartDate) // the market is now due
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go RunBots(ctx, db) // what main() starts
+
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		var status string
+		if err := db.QueryRow(`SELECT status FROM markets WHERE id = $1`, marketID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status == "resolved" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("bots did not settle the due market within 10s of starting")
+		}
+	}
+}
+
+// T17: a market that fails to settle doesn't stop the others, and the error is reported.
+func TestT17FailedSettlementDoesNotStopOthers(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	good, goodSong, goodDate := newMarket(t, db, 50, 5, 50)
+	bad, badSong, badDate := newMarket(t, db, 50, 5, 50)
+	addRank(t, db, goodSong, goodDate, 40) // YES wins both
+	fillChart(t, db, goodDate)
+	addRank(t, db, badSong, badDate, 40)
+	fillChart(t, db, badDate)
+
+	winner := newUser(t, db)
+	if _, err := Buy(ctx, db, winner, good, "yes", 2); err != nil { // -100
+		t.Fatal(err)
+	}
+	broken := newUser(t, db)
+	if _, err := Buy(ctx, db, broken, bad, "yes", 1); err != nil { // -50
+		t.Fatal(err)
+	}
+	// Break the bad market: its winner has no balance row, so the payout fails.
+	if _, err := db.Exec(`DELETE FROM balances WHERE user_id = $1`, broken); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { // let later bot runs settle it normally
+		db.Exec(`INSERT INTO balances (user_id, balance) VALUES ($1, 9950)`, broken)
+	})
+
+	err := botTick(ctx, db)
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("resolve market %d", bad)) {
+		t.Fatalf("botTick error = %v, want it to report market %d", err, bad)
+	}
+	var goodStatus, badStatus string
+	if err := db.QueryRow(`SELECT (SELECT status FROM markets WHERE id = $1), (SELECT status FROM markets WHERE id = $2)`,
+		good, bad).Scan(&goodStatus, &badStatus); err != nil {
+		t.Fatal(err)
+	}
+	if goodStatus != "resolved" || badStatus != "open" {
+		t.Fatalf("good market %s, bad market %s; want resolved and open", goodStatus, badStatus)
+	}
+	checkUser(t, db, winner, 10_100, 100) // the good market still paid out
+}
+
+// T18: 50 users trading the same market at once all succeed, and every balance
+// still matches its ledger.
+func TestT18ManyUsersTradeAtOnce(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	marketID, _, _ := newMarket(t, db, 50, 5, 50)
+	const users = 50
+	ids := make([]int64, users)
+	for i := range ids {
+		ids[i] = newUser(t, db)
+	}
+
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		side := []string{"yes", "no"}[i%2]
+		wg.Go(func() {
+			if _, err := Buy(ctx, db, id, marketID, side, 3); err != nil {
+				t.Error(err)
+				return
+			}
+			if _, err := Sell(ctx, db, id, marketID, side, 1); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+
+	var volume int64
+	if err := db.QueryRow(`SELECT coalesce(sum(quantity), 0) FROM ledger_entries WHERE market_id = $1 AND kind = 'buy'`,
+		marketID).Scan(&volume); err != nil {
+		t.Fatal(err)
+	}
+	if volume != users*3 {
+		t.Fatalf("contracts bought = %d, want %d", volume, users*3)
+	}
+	for _, id := range ids {
+		checkUser(t, db, id, 9_900, 0) // bought 3 at 50, sold 1 at 50
+	}
+}
+
+// T12: the weekly grant pays once per week and never twice, even when claimed at once.
+func TestT12WeeklyGrant(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	id := newUser(t, db)
+	ageGrants := func() { // pretend a week has passed
+		if _, err := db.Exec(`UPDATE ledger_entries SET created_at = created_at - interval '8 days'
+			WHERE user_id = $1 AND kind = 'grant'`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := ClaimWeeklyGrant(ctx, db, id); !errors.Is(err, ErrGrantNotReady) {
+		t.Fatalf("brand-new account: got %v, want ErrGrantNotReady", err)
+	}
+	ageGrants()
+	balance, err := ClaimWeeklyGrant(ctx, db, id)
+	if err != nil || balance != StartingBalance+WeeklyGrant {
+		t.Fatalf("first weekly claim: balance %d, err %v", balance, err)
+	}
+	if _, err := ClaimWeeklyGrant(ctx, db, id); !errors.Is(err, ErrGrantNotReady) {
+		t.Fatalf("second claim in the same week: got %v, want ErrGrantNotReady", err)
+	}
+
+	ageGrants()
+	var paid atomic.Int64
+	var wg sync.WaitGroup
+	for range 10 { // ten claims at once: exactly one is paid
+		wg.Go(func() {
+			_, err := ClaimWeeklyGrant(ctx, db, id)
+			if err == nil {
+				paid.Add(1)
+			} else if !errors.Is(err, ErrGrantNotReady) {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	if paid.Load() != 1 {
+		t.Fatalf("%d of 10 concurrent claims were paid, want exactly 1", paid.Load())
+	}
+	checkUser(t, db, id, StartingBalance+2*WeeklyGrant, 0) // grants never count toward P&L
+}
+
+// T11: GET /markets lists the genre charts a song is on, and genre rows never
+// leak into its Hot 100 history.
+func TestT11MarketGenres(t *testing.T) {
+	db := testDB(t)
+	marketID, songID, chartDate := newMarket(t, db, 50, 5, 62)
+	day, err := time.Parse(time.DateOnly, chartDate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO chart_snapshots (chart, song_id, chart_date, rank) VALUES ('rock-songs', $1, $2, 3)`,
+		songID, day.AddDate(0, 0, -7).Format(time.DateOnly)); err != nil {
+		t.Fatal(err)
+	}
+
+	res := httptest.NewRecorder()
+	routes(db).ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/markets", nil))
+	var markets []struct {
+		ID      int64             `json:"id"`
+		Genres  []string          `json:"genres"`
+		History []json.RawMessage `json:"history"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &markets); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range markets {
+		if m.ID == marketID {
+			if len(m.Genres) != 1 || m.Genres[0] != "rock-songs" || len(m.History) != 0 {
+				t.Fatalf("genres %v, history %d points; want [rock-songs] and no Hot 100 history", m.Genres, len(m.History))
+			}Tes
+			return
+		}
+	}
+	t.Fatal("market not listed")
 }

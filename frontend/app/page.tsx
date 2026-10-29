@@ -4,6 +4,7 @@ import Image from "next/image";
 import { AuthDialog, useOctaveUser } from "./auth-dialog";
 import { LedgerView } from "./ledger";
 import { MARKET_FILTERS, MARKET_SORTS, artworkColor, held, lastMove, marketQuestion, matchesFilter, monogram, parseQuantity, rankPath, sidePrice, sortMarkets, type Account, type LiveMarket, type MarketFilter, type MarketSort, type TradeAction, type TradeSide } from "./trading";
+import {Tutorial} from "./tutorial-dialog";
 function Icon({ name, size = 20 }: {
     name: "search" | "arrow" | "music" | "chart" | "clock" | "star";
     size?: number;
@@ -153,5 +154,6 @@ export default function Home() {
       </>}
     </main><footer><button className="brand footer-brand" onClick={goHome}><Image src="/octave-notes.svg" alt="Octave" width={812} height={256} className="brand-logo" /></button><span>Made for music minds.</span><span className="footer-right">Virtual currency. Endless possibility. <span>© 2026 Octave</span></span></footer>
     {authMode && <AuthDialog mode={authMode} onClose={() => setAuthMode(null)}/>}
+        {user && <Tutorial key={user.uid}/>}
   </div>;
 }

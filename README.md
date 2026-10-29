@@ -177,6 +177,99 @@ Add Python dependencies to `ingestion/requirements.txt`.
 
 `ingestion/billboard_fixed.py` is a modified copy of the unofficial `billboard.py` library with a metadata parser fix. Original attribution and license are retained in the source and `ingestion/BILLBOARD_LICENSE`.
 
+## Running the Tests
+
+The test cases in the Module 9 software test sheet (T1–T21) map to the automated tests below. Commands are shown for PowerShell; on macOS/Linux use `export DATABASE_URL=...` instead of `$env:DATABASE_URL = ...`.
+
+### 1. Test database
+
+Go tests that need PostgreSQL use a separate database, because they leave test users and markets behind. Create (or reset) it once per session:
+
+```powershell
+docker start octave-db
+docker exec octave-db psql -U postgres -c "DROP DATABASE IF EXISTS music_trader_test" -c "CREATE DATABASE music_trader_test"
+```
+
+### 2. Backend (Go)
+
+From `backend/`:
+
+```powershell
+$env:DATABASE_URL = "postgres://postgres:postgres@127.0.0.1:5432/music_trader_test?sslmode=disable"
+go test -v -count=1 ./...
+```
+
+Every test should print `--- PASS` and the run should end with `ok`. `--- SKIP ... DATABASE_URL not set` means the variable is missing in that terminal. Use `127.0.0.1` rather than `localhost` on Windows, where `localhost` can reach WSL's relay instead of Docker. Run one test with `-run`, for example `go test -v -count=1 -run TestT17 ./...`; `-run` takes a pattern, so `-run "TestT1[0-9]"` runs T10–T19.
+
+| Sheet | Go test |
+|---|---|
+| T3 | `TestBuy2500RecordedInLedger` |
+| T4 | `TestT4PortfolioGainAndLoss` |
+| T9 | `TestUserForFirebase`, `TestAuthMe` |
+| T10 | `TestT10SellFiveContracts` |
+| T11 | `TestT11MarketGenres` |
+| T12 | `TestT12WeeklyGrant` |
+| T13 | `TestBuyAndResolve`, `TestBotsOpenAndResolve` |
+| T14 | `TestBuyAndResolve` |
+| T15 | `TestT15LeaderboardPeriods` |
+| T16 | `TestT16BotsRunOnStart` |
+| T17 | `TestT17FailedSettlementDoesNotStopOthers` |
+| T18 | `TestT18ManyUsersTradeAtOnce` |
+| T19, T20 | `TestT19T20GroupsAndGroupLeaderboard` |
+
+### 3. Ingestion (Python)
+
+From the repository root, with the virtual environment activated (`.\.venv\Scripts\Activate.ps1`):
+
+```powershell
+python -m pytest ingestion/tests/ -v
+```
+
+Run one test with `-k`, for example `python -m pytest ingestion/tests/ -v -k test_valid_snapshot`.
+
+| Sheet | Python test |
+|---|---|
+| T2 | `test_song_is_valid` |
+| T6 | `test_valid_snapshot` |
+| T7 | `test_negative_rank_is_invalid` |
+| T8 | `test_snapshot_with_wrong_date_format` |
+
+### 4. Frontend (Vitest)
+
+From `frontend/`:
+
+```powershell
+npm test
+```
+
+| Sheet | Frontend test |
+|---|---|
+| T11 | "genre filter shows only songs on that genre's chart" (`tests/trading.test.ts`) |
+| T21 | both tests in `tests/tutorial.test.ts` |
+
+### 5. Manual checks
+
+Run the app against the real database (`postgres`, not `music_trader_test`) in two terminals:
+
+```powershell
+# Terminal 1, in backend/
+$env:DATABASE_URL = "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+go run .
+# Terminal 2, in frontend/
+npm run dev
+```
+
+| Sheet | Steps | Expected |
+|---|---|---|
+| T16 (log) | Watch terminal 1 as it starts. With no chart loaded, run `python -m ingestion.run_ingestion` from the repository root (same `DATABASE_URL`), then restart `go run .`. | `Database migrated`, then `bots: opened N markets from the ... chart` |
+| T1 | Open http://localhost:3000, click **Get started**, sign up, log out, then **Log in**. | Signed in with your name in the header; a wrong password shows an error |
+| T9 (UI) | Right after signing up. | Header shows **♫ 10,000** |
+| T21 (UI) | After signing in, click **Next** through the walkthrough to **Finish**, then reload. | All five steps show, and it does not reappear. To repeat it, run `localStorage.removeItem("octave-tutorial-done")` in the browser console. |
+
+T5 (bot fills bids within a price range) needs order matching, which is in progress on the `order_matching` branch.
+
+When filling in the sheet, put the observed outcome in **Actual Result** (for example "balance 10,100, P&L +100"), Pass or Fail in **Status**, and the test name in **Comments**.
+
 ## Contributing
 
 1. Create a feature branch from an up-to-date `main`.

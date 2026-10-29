@@ -1842,3 +1842,34 @@ html {
     display:none
   }
 }
+
+/* T21: trading walkthrough shown to signed-in users until finished or skipped */
+.tutorial {
+  position:fixed;
+  right:24px;
+  bottom:24px;
+  z-index:50;
+  width:min(360px, calc(100vw - 32px));
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:9px;
+  padding:20px;
+  box-shadow:0 12px 32px rgba(0,0,0,.12)
+}
+.tutorial h2 {
+  font-size:18px;
+  font-weight:500;
+  margin:8px 0
+}
+.tutorial p {
+  font-size:13px;
+  line-height:1.6;
+  color:var(--muted)
+}
+.tutorial-actions {
+  display:flex;
+  justify-content:flex-end;
+  align-items:center;
+  gap:9px;
+  margin-top:14px
+}

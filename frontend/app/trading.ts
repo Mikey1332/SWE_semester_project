@@ -11,6 +11,7 @@ export type LiveMarket = {
     closes_at: string;
     volume: number; // contracts bought so far
     history: RankPoint[]; // last 10 Hot 100 ranks, oldest first; the last is baseline_rank
+    genres: string[]; // Billboard genre charts the song is on, e.g. "rock-songs"
 };
 export type RankPoint = { chart_date: string; rank: number };
 export type Position = { market_id: number; side: TradeSide; quantity: number; cost_basis: number };
@@ -88,10 +89,17 @@ export function lastMove(m: LiveMarket): number | null {
     return h.length < 2 ? null : h[h.length - 2].rank - h[h.length - 1].rank;
 }
 
-export const MARKET_FILTERS = ["All markets", "Rising", "Falling", "New entries"] as const;
+export const MARKET_FILTERS = ["All markets", "Rising", "Falling", "New entries", "Pop", "Country", "Rock", "R&B / Hip-Hop"] as const;
+
 export type MarketFilter = (typeof MARKET_FILTERS)[number];
+const GENRE_CHARTS: Partial<Record<MarketFilter, string>> = { Pop: "pop-songs", Country: "country-songs", Rock: "rock-songs", "R&B / Hip-Hop": "r-b-hip-hop-songs" };
+
 
 export function matchesFilter(m: LiveMarket, filter: MarketFilter): boolean {
+    const chart = GENRE_CHARTS[filter];
+    if (chart)
+        return m.genres.includes(chart);
+
     const move = lastMove(m);
     switch (filter) {
         case "Rising": return move !== null && move > 0;

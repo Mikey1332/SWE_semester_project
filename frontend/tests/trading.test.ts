@@ -5,7 +5,16 @@ const market: LiveMarket = {
     id: 7, title: "Golden", artist: "HUNTR/X", chart_date: "2026-10-31", baseline_rank: 12,
     shift: 5, yes_price: 62, no_price: 38, closes_at: "2026-10-26T04:00:00Z", volume: 40,
     history: [{ chart_date: "2026-10-17", rank: 17 }, { chart_date: "2026-10-24", rank: 12 }],
+    genres: [],
 };
+
+test("genre filter shows only songs on that genre's chart", () => {
+    const rap: LiveMarket = { ...market, id: 1, genres: ["r-b-hip-hop-songs"] };
+    const country: LiveMarket = { ...market, id: 2, genres: ["country-songs"] };
+    const rock: LiveMarket = { ...market, id: 3, genres: ["rock-songs"] };
+    expect([rap, country, rock].filter(m => matchesFilter(m, "Rock")).map(m => m.id)).toEqual([3]);
+});
+
 
 test("market question reads the bot's shift", () => {
     expect(marketQuestion(market)).toBe("Will Golden rise 5+ spots from #12 on the 2026-10-31 chart?");

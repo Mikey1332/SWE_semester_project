@@ -60,8 +60,8 @@ func suggest(ranks []int) (shift, yesPrice int) {
 func CreateMarkets(ctx context.Context, db *sql.DB, chartDate string) (int, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT song_id, rank FROM chart_snapshots
-		WHERE chart_date <= $1
-		  AND song_id IN (SELECT song_id FROM chart_snapshots WHERE chart_date = $1)
+		WHERE chart = 'hot-100' AND chart_date <= $1
+		  AND song_id IN (SELECT song_id FROM chart_snapshots WHERE chart = 'hot-100' AND chart_date = $1)
 		ORDER BY song_id, chart_date`, chartDate)
 	if err != nil {
 		return 0, err
@@ -125,7 +125,7 @@ func botTick(ctx context.Context, db *sql.DB) error {
 	rows, err := db.QueryContext(ctx, `
 		SELECT id FROM markets m
 		WHERE status = 'open'
-		  AND (SELECT count(*) FROM chart_snapshots c WHERE c.chart_date = m.chart_date) >= $1`, ChartSize)
+		  AND (SELECT count(*) FROM chart_snapshots c WHERE c.chart = 'hot-100' AND c.chart_date = m.chart_date) >= $1`, ChartSize)
 	if err != nil {
 		return err
 	}
@@ -156,7 +156,7 @@ func botTick(ctx context.Context, db *sql.DB) error {
 	var latest sql.NullString
 	if err := db.QueryRowContext(ctx, `
 		SELECT max(chart_date)::text FROM (
-			SELECT chart_date FROM chart_snapshots GROUP BY chart_date HAVING count(*) >= $1
+			SELECT chart_date FROM chart_snapshots WHERE chart = 'hot-100' GROUP BY chart_date HAVING count(*) >= $1
 		) complete`, ChartSize).Scan(&latest); err != nil {
 		return errors.Join(append(errs, err)...)
 	}

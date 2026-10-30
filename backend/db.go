@@ -19,7 +19,6 @@ const (
 
 var (
 	ErrInsufficientFunds  = errors.New("insufficient Music Notes")
-	ErrInvalidOrder       = errors.New("side must be yes or no and quantity between 1 and 1,000,000")
 	ErrMarketClosed       = errors.New("market is not open")
 	ErrChartNotIn         = errors.New("chart for this market has not been fully ingested")
 	ErrNotEnoughContracts = errors.New("you don't hold that many contracts")
@@ -116,116 +115,6 @@ func Post(ctx context.Context, tx *sql.Tx, e Entry) (int64, error) {
 	return balance, err
 }
 
-// lockOpenMarket validates an order and returns the price per contract for
-// side, locking the market so Resolve waits for in-flight trades (and trades
-// wait for Resolve). The market must be open and before closes_at.
-func lockOpenMarket(ctx context.Context, tx *sql.Tx, marketID int64, side string, quantity int64) (int64, error) {
-	if side != "yes" && side != "no" {
-		return 0, ErrInvalidOrder
-	}
-	if quantity <= 0 || quantity > 1_000_000 { // the cap keeps price*quantity far from overflow
-		return 0, ErrInvalidOrder
-	}
-
-	var price int64
-	var open bool
-	err := tx.QueryRowContext(ctx,
-		`SELECT yes_price, status = 'open' AND now() < closes_at FROM markets WHERE id = $1 FOR SHARE`,
-		marketID).Scan(&price, &open)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !open) {
-		return 0, ErrMarketClosed
-	}
-	if err != nil {
-		return 0, err
-	}
-	if side == "no" {
-		price = ContractPayout - price
-	}
-	return price, nil
-}
-
-// Buy sells quantity YES or NO contracts to the user at the bot's price,
-// returning the new balance.
-func Buy(ctx context.Context, db *sql.DB, userID, marketID int64, side string, quantity int64) (int64, error) {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-
-	price, err := lockOpenMarket(ctx, tx, marketID, side, quantity)
-	if err != nil {
-		return 0, err
-	}
-	cost := price * quantity
-	balance, err := Post(ctx, tx, Entry{UserID: userID, Amount: -cost, Kind: "buy", MarketID: &marketID,
-		Side: side, Quantity: quantity, Price: price})
-	if err != nil {
-		return 0, err
-	}
-	_, err = tx.ExecContext(ctx,
-		`INSERT INTO positions (user_id, market_id, side, quantity, cost_basis)
-		 VALUES ($1, $2, $3, $4, $5)
-		 ON CONFLICT (user_id, market_id, side) DO UPDATE
-		 SET quantity = positions.quantity + EXCLUDED.quantity,
-		     cost_basis = positions.cost_basis + EXCLUDED.cost_basis`,
-		userID, marketID, side, quantity, cost)
-	if err != nil {
-		return 0, err
-	}
-	return balance, tx.Commit()
-}
-
-// Sell buys quantity of the user's contracts back at the bot's current price,
-// returning the new balance. The sold share of the position's cost basis
-// leaves with them, so realized P&L moves by proceeds minus that cost.
-func Sell(ctx context.Context, db *sql.DB, userID, marketID int64, side string, quantity int64) (int64, error) {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-
-	price, err := lockOpenMarket(ctx, tx, marketID, side, quantity)
-	if err != nil {
-		return 0, err
-	}
-	var held, cost int64
-	err = tx.QueryRowContext(ctx,
-		`SELECT quantity, cost_basis FROM positions
-		 WHERE user_id = $1 AND market_id = $2 AND side = $3 FOR UPDATE`,
-		userID, marketID, side).Scan(&held, &cost)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && held < quantity) {
-		return 0, ErrNotEnoughContracts
-	}
-	if err != nil {
-		return 0, err
-	}
-
-	// Rounds down, so a partial sale never takes the whole cost basis; selling
-	// everything takes exactly all of it.
-	soldCost := cost * quantity / held
-	balance, err := Post(ctx, tx, Entry{UserID: userID, Amount: price * quantity, Kind: "sell", MarketID: &marketID,
-		Side: side, Quantity: quantity, Price: price})
-	if err != nil {
-		return 0, err
-	}
-	if held == quantity {
-		_, err = tx.ExecContext(ctx,
-			`DELETE FROM positions WHERE user_id = $1 AND market_id = $2 AND side = $3`,
-			userID, marketID, side)
-	} else {
-		_, err = tx.ExecContext(ctx,
-			`UPDATE positions SET quantity = quantity - $4, cost_basis = cost_basis - $5
-			 WHERE user_id = $1 AND market_id = $2 AND side = $3`,
-			userID, marketID, side, quantity, soldCost)
-	}
-	if err != nil {
-		return 0, err
-	}
-	return balance, tx.Commit()
-}
-
 // Resolve settles a market from its chart: winning contracts pay ContractPayout
 // each and every position in the market is closed. Resolving twice is a no-op.
 // The chart must be fully loaded (ChartSize rows), so a half-ingested chart
@@ -236,6 +125,11 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 		return err
 	}
 	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(3031)`)
+	if err != nil {
+		return err
+	}
 
 	var songID, baseline, shift int64
 	var chartDate, status string
@@ -299,6 +193,10 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 			Side: outcome, Quantity: w.quantity, Price: ContractPayout}); err != nil {
 			return err
 		}
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE orders SET cancelled = true WHERE market_id = $1 AND remaining > 0`, marketID)
+	if err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM positions WHERE market_id = $1`, marketID); err != nil {
 		return err

@@ -371,7 +371,7 @@ func TestBuy2500RecordedInLedger(t *testing.T) {
 	marketID, _, _ := newMarket(t, db, 50, 5, 50) // YES costs 50
 	id := newUser(t, db)
 
-	balance, err := Buy(ctx, db, id, marketID, "yes", 50) // 50 x 50 = 2,500
+	balance, err := buyForTest(t, ctx, db, id, marketID, "yes", 50) // 50 x 50 = 2,500
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,10 +410,10 @@ func TestBuyAndResolve(t *testing.T) {
 	marketID, songID, chartDate := newMarket(t, db, 50, 5, 62) // YES = rises 5+ spots from #50
 	yes, no := newUser(t, db), newUser(t, db)
 
-	if _, err := Buy(ctx, db, yes, marketID, "yes", 10); err != nil { // 10 x 62
+	if _, err := buyForTest(t, ctx, db, yes, marketID, "yes", 10); err != nil { // 10 x 62
 		t.Fatal(err)
 	}
-	if _, err := Buy(ctx, db, no, marketID, "no", 10); err != nil { // 10 x (100 - 62)
+	if _, err := buyForTest(t, ctx, db, no, marketID, "no", 10); err != nil { // 10 x (100 - 62)
 		t.Fatal(err)
 	}
 	checkUser(t, db, yes, 9_380, 0) // open positions are not losses yet
@@ -444,7 +444,7 @@ func TestBuyAndResolve(t *testing.T) {
 	if open != 0 {
 		t.Fatalf("%d positions left open after resolution", open)
 	}
-	if _, err := Buy(ctx, db, yes, marketID, "yes", 1); !errors.Is(err, ErrMarketClosed) {
+	if _, err := buyForTest(t, ctx, db, yes, marketID, "yes", 1); !errors.Is(err, ErrMarketClosed) {
 		t.Fatalf("buy after resolution: got %v, want ErrMarketClosed", err)
 	}
 }
@@ -456,7 +456,7 @@ func TestResolveOffChart(t *testing.T) {
 	marketID, _, chartDate := newMarket(t, db, 10, -20, 30) // YES = falls 20+ spots from #10
 	id := newUser(t, db)
 
-	if _, err := Buy(ctx, db, id, marketID, "yes", 5); err != nil { // 5 x 30
+	if _, err := buyForTest(t, ctx, db, id, marketID, "yes", 5); err != nil { // 5 x 30
 		t.Fatal(err)
 	}
 	fillChart(t, db, chartDate) // full chart without our song on it
@@ -483,45 +483,19 @@ func TestBuyRejects(t *testing.T) {
 		quantity int64
 		want     error
 	}{
-		{marketID, "up", 1, ErrInvalidOrder},
-		{marketID, "yes", 0, ErrInvalidOrder},
-		{marketID, "yes", -1, ErrInvalidOrder}, // would otherwise credit notes
-		{marketID, "yes", 1_000_001, ErrInvalidOrder},
-		{0, "yes", 1, ErrMarketClosed},
+		{marketID, "up", 1, ErrLimitOrder},
+		{marketID, "yes", 0, ErrLimitOrder},
+		{marketID, "yes", -1, ErrLimitOrder}, // would otherwise credit notes
+		{marketID, "yes", 1_000_001, ErrLimitOrder},
+		{0, "yes", 1, ErrLimitOrder},
 		{pastClose, "yes", 1, ErrMarketClosed},       // trading stopped before the chart came out
 		{marketID, "yes", 102, ErrInsufficientFunds}, // 102 x 99 = 10,098
 	} {
-		if _, err := Buy(ctx, db, id, c.market, c.side, c.quantity); !errors.Is(err, c.want) {
+		if _, err := buyForTest(t, ctx, db, id, c.market, c.side, c.quantity); !errors.Is(err, c.want) {
 			t.Fatalf("Buy(%d, %q, %d): got %v, want %v", c.market, c.side, c.quantity, err, c.want)
 		}
 	}
 	checkUser(t, db, id, StartingBalance, 0)
-}
-
-func TestBuyEndpoint(t *testing.T) {
-	db := testDB(t)
-	marketID, _, _ := newMarket(t, db, 50, 5, 62)
-	id := newUser(t, db)
-
-	signInAs(t, id)
-
-	for _, c := range []struct {
-		body, want string
-		code       int
-	}{
-		{`{"side":"yes","quantity":2}`, `{"balance":9876}`, http.StatusOK}, // 2 x 62
-		{`{"side":"yes","quantity":0}`, "", http.StatusBadRequest},
-		{`not json`, "", http.StatusBadRequest},
-		{`{"side":"no","quantity":1000}`, "", http.StatusConflict}, // 1000 x 38 > balance
-	} {
-		res := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/markets/%d/buy", marketID), strings.NewReader(c.body))
-		routes(db).ServeHTTP(res, req)
-		if res.Code != c.code || (c.want != "" && strings.TrimSpace(res.Body.String()) != c.want) {
-			t.Fatalf("POST %s: %d %s, want %d %s", c.body, res.Code, res.Body, c.code, c.want)
-		}
-	}
-	checkUser(t, db, id, 9_876, 0)
 }
 
 // Selling returns the current price per contract and takes the sold share of
@@ -532,10 +506,10 @@ func TestSell(t *testing.T) {
 	marketID, _, _ := newMarket(t, db, 50, 5, 62)
 	id := newUser(t, db)
 
-	if _, err := Buy(ctx, db, id, marketID, "yes", 10); err != nil { // 10 x 62 = 620
+	if _, err := buyForTest(t, ctx, db, id, marketID, "yes", 10); err != nil { // 10 x 62 = 620
 		t.Fatal(err)
 	}
-	balance, err := Sell(ctx, db, id, marketID, "yes", 4) // 4 x 62 = 248
+	balance, err := sellForTest(t, ctx, db, id, marketID, "yes", 4) // 4 x 62 = 248
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -553,10 +527,10 @@ func TestSell(t *testing.T) {
 		t.Fatalf("position after selling 4: quantity=%d cost_basis=%d, want 6 and 372", quantity, cost)
 	}
 
-	if _, err := Sell(ctx, db, id, marketID, "yes", 7); !errors.Is(err, ErrNotEnoughContracts) {
+	if _, err := sellForTest(t, ctx, db, id, marketID, "yes", 7); !errors.Is(err, ErrNotEnoughContracts) {
 		t.Fatalf("selling 7 of 6: got %v, want ErrNotEnoughContracts", err)
 	}
-	if _, err := Sell(ctx, db, id, marketID, "yes", 6); err != nil {
+	if _, err := sellForTest(t, ctx, db, id, marketID, "yes", 6); err != nil {
 		t.Fatal(err)
 	}
 	checkUser(t, db, id, StartingBalance, 0)
@@ -577,7 +551,7 @@ func TestSellRejects(t *testing.T) {
 	ctx := context.Background()
 	marketID, songID, chartDate := newMarket(t, db, 50, 5, 50)
 	id := newUser(t, db)
-	if _, err := Buy(ctx, db, id, marketID, "yes", 5); err != nil {
+	if _, err := buyForTest(t, ctx, db, id, marketID, "yes", 5); err != nil {
 		t.Fatal(err)
 	}
 
@@ -587,11 +561,11 @@ func TestSellRejects(t *testing.T) {
 		want     error
 	}{
 		{"no", 1, ErrNotEnoughContracts}, // never bought NO
-		{"yes", 0, ErrInvalidOrder},
-		{"yes", -1, ErrInvalidOrder}, // would otherwise debit through a "sale"
-		{"maybe", 1, ErrInvalidOrder},
+		{"yes", 0, ErrLimitOrder},
+		{"yes", -1, ErrLimitOrder}, // would otherwise debit through a "sale"
+		{"maybe", 1, ErrLimitOrder},
 	} {
-		if _, err := Sell(ctx, db, id, marketID, c.side, c.quantity); !errors.Is(err, c.want) {
+		if _, err := sellForTest(t, ctx, db, id, marketID, c.side, c.quantity); !errors.Is(err, c.want) {
 			t.Fatalf("Sell(%q, %d): got %v, want %v", c.side, c.quantity, err, c.want)
 		}
 	}
@@ -601,53 +575,12 @@ func TestSellRejects(t *testing.T) {
 	if err := Resolve(ctx, db, marketID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Sell(ctx, db, id, marketID, "yes", 1); !errors.Is(err, ErrMarketClosed) {
+	if _, err := sellForTest(t, ctx, db, id, marketID, "yes", 1); !errors.Is(err, ErrMarketClosed) {
 		t.Fatalf("sell after resolution: got %v, want ErrMarketClosed", err)
 	}
 }
 
 // The sell endpoint works for the signed-in user and /auth/me shows what they hold.
-func TestSellEndpointAndPositions(t *testing.T) {
-	db := testDB(t)
-	marketID, _, _ := newMarket(t, db, 50, 5, 62)
-	id := newUser(t, db)
-	signInAs(t, id)
-
-	post := func(action, body string) *httptest.ResponseRecorder {
-		res := httptest.NewRecorder()
-		routes(db).ServeHTTP(res, httptest.NewRequest(http.MethodPost,
-			fmt.Sprintf("/markets/%d/%s", marketID, action), strings.NewReader(body)))
-		return res
-	}
-	if res := post("buy", `{"side":"no","quantity":10}`); res.Code != http.StatusOK { // 10 x 38
-		t.Fatalf("buy: %d %s", res.Code, res.Body)
-	}
-	if res := post("sell", `{"side":"no","quantity":3}`); res.Code != http.StatusOK || strings.TrimSpace(res.Body.String()) != `{"balance":9734}` {
-		t.Fatalf("sell: %d %s, want 200 {\"balance\":9734}", res.Code, res.Body)
-	}
-	if res := post("sell", `{"side":"no","quantity":8}`); res.Code != http.StatusConflict {
-		t.Fatalf("oversell: got %d, want 409", res.Code)
-	}
-
-	res := httptest.NewRecorder()
-	routes(db).ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/auth/me", nil))
-	var me struct {
-		Positions []struct {
-			MarketID  int64  `json:"market_id"`
-			Side      string `json:"side"`
-			Quantity  int64  `json:"quantity"`
-			CostBasis int64  `json:"cost_basis"`
-		} `json:"positions"`
-	}
-	if err := json.Unmarshal(res.Body.Bytes(), &me); err != nil {
-		t.Fatal(err)
-	}
-	if len(me.Positions) != 1 || me.Positions[0].MarketID != marketID || me.Positions[0].Side != "no" ||
-		me.Positions[0].Quantity != 7 || me.Positions[0].CostBasis != 266 {
-		t.Fatalf("positions = %+v, want one NO position of 7 costing 266 in market %d", me.Positions, marketID)
-	}
-}
-
 // GET /markets lists tradeable markets with both prices and hides closed ones.
 func TestMarketsList(t *testing.T) {
 	db := testDB(t)
@@ -661,7 +594,7 @@ func TestMarketsList(t *testing.T) {
 	addRank(t, db, songID, twoWeeksBack, 55)
 	addRank(t, db, songID, lastWeek, 50)
 	addRank(t, db, songID, chartDate, 44) // the market's own chart must not leak into its history
-	if _, err := Buy(context.Background(), db, newUser(t, db), openID, "yes", 3); err != nil {
+	if _, err := buyForTest(t, context.Background(), db, newUser(t, db), openID, "yes", 3); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE markets SET closes_at = now() - interval '1 second' WHERE id = $1`, closedID); err != nil {
@@ -726,10 +659,10 @@ func TestMyLedger(t *testing.T) {
 		t.Fatalf("signed out: got %d, want 401", res.Code)
 	}
 
-	if _, err := Buy(ctx, db, id, marketID, "yes", 10); err != nil { // -620
+	if _, err := buyForTest(t, ctx, db, id, marketID, "yes", 10); err != nil { // -620
 		t.Fatal(err)
 	}
-	if _, err := Sell(ctx, db, id, marketID, "yes", 4); err != nil { // +248
+	if _, err := sellForTest(t, ctx, db, id, marketID, "yes", 4); err != nil { // +248
 		t.Fatal(err)
 	}
 	addRank(t, db, songID, chartDate, 44) // rose 6: YES wins

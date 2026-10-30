@@ -82,15 +82,19 @@ func PlaceOrder(ctx context.Context, db *sql.DB, order Order) (Order, error) {
 		return Order{}, err
 	}
 	defer tx.Rollback()
-	// orders for identical amrket wait
+
+	_, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(3031)`)
+	if err != nil {
+		return Order{}, err
+	}
 
 	var marketID int64
 
 	err = tx.QueryRowContext(ctx, `
-	SELECT ID
-	FROM markets
-	WHERE id = $1
-	FOR UPDATE
+	SELECT id
+		FROM markets
+		WHERE id = $1
+		FOR UPDATE
 	`, order.MarketID).Scan(&marketID)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -100,7 +104,6 @@ func PlaceOrder(ctx context.Context, db *sql.DB, order Order) (Order, error) {
 		return Order{}, err
 	}
 
-	// ensure funds are protected
 	var balance int64
 
 	err = tx.QueryRowContext(ctx, `
@@ -117,7 +120,19 @@ func PlaceOrder(ctx context.Context, db *sql.DB, order Order) (Order, error) {
 	existingOrder, err := findOrder(ctx, tx, order.UserID, order.RequestID)
 
 	if err == nil {
-		if existingOrder.MarketID != order.MarketID || existingOrder.Side != order.Side || existingOrder.Action != order.Action || existingOrder.Price != order.Price || existingOrder.Quantity != order.Quantity {
+		if existingOrder.MarketID != order.MarketID {
+			return Order{}, ErrRequestConflict
+		}
+		if existingOrder.Side != order.Side {
+			return Order{}, ErrRequestConflict
+		}
+		if existingOrder.Action != order.Action {
+			return Order{}, ErrRequestConflict
+		}
+		if existingOrder.Price != order.Price {
+			return Order{}, ErrRequestConflict
+		}
+		if existingOrder.Quantity != order.Quantity {
 			return Order{}, ErrRequestConflict
 		}
 		return existingOrder, nil
@@ -129,10 +144,9 @@ func PlaceOrder(ctx context.Context, db *sql.DB, order Order) (Order, error) {
 	var open bool
 
 	err = tx.QueryRowContext(ctx, `
-	SELECT status = 'open'
-	AND clock_timestamp() < closes_at
-	FROM markets
-	wHERE id = $1
+	SELECT status = 'open' AND clock_timestamp() < closes_at
+		FROM markets
+		WHERE id = $1
 	`, order.MarketID).Scan(&open)
 
 	if err != nil {
@@ -146,15 +160,15 @@ func PlaceOrder(ctx context.Context, db *sql.DB, order Order) (Order, error) {
 	if order.Action == "buy" {
 		var reserved int64
 		err = tx.QueryRowContext(ctx, `
-            SELECT COALESCE(SUM(o.price * o.remaining), 0)
-            FROM orders o
-            JOIN markets m ON m.id = o.market_id
-            WHERE o.user_id = $1
-              AND o.action = 'buy'
-              AND o.remaining > 0
-              AND NOT o.cancelled
-              AND m.status = 'open'
-              AND clock_timestamp() < m.closes_at
+            SELECT COALESCE(SUM(orders.price * orders.remaining), 0)
+            FROM orders
+            JOIN markets ON markets.id = orders.market_id
+            WHERE orders.user_id = $1
+              AND orders.action = 'buy'
+              AND orders.remaining > 0
+              AND orders.cancelled = false
+              AND markets.status = 'open'
+              AND clock_timestamp() < markets.closes_at
         `, order.UserID).Scan(&reserved)
 		if err != nil {
 			return Order{}, err
@@ -207,6 +221,43 @@ func PlaceOrder(ctx context.Context, db *sql.DB, order Order) (Order, error) {
 	if err != nil {
 		return Order{}, err
 	}
+	for order.Remaining > 0 {
+		match, err := findMatchingOrder(ctx, tx, order)
+		if errors.Is(err, sql.ErrNoRows) {
+			break
+		}
+		if err != nil {
+			return Order{}, err
+		}
+
+		quantity := order.Remaining
+		if match.Remaining < quantity {
+			quantity = match.Remaining
+		}
+
+		price := match.Price
+		if match.Side != order.Side {
+			price = 100 - match.Price
+		}
+
+		err = fillOrder(ctx, tx, match, quantity, match.Price)
+		if err != nil {
+			return Order{}, err
+		}
+		err = fillOrder(ctx, tx, order, quantity, price)
+		if err != nil {
+			return Order{}, err
+		}
+		_, err = tx.ExecContext(ctx, `
+            INSERT INTO trades (maker_id, taker_id, quantity, maker_price, taker_price)
+            VALUES ($1, $2, $3, $4, $5)
+        `, match.ID, order.ID, quantity, match.Price, price)
+		if err != nil {
+			return Order{}, err
+		}
+		order.Remaining = order.Remaining - quantity
+	}
+
 	err = tx.Commit()
 	if err != nil {
 		return Order{}, err

@@ -82,7 +82,7 @@ func TestBotsOpenAndResolve(t *testing.T) {
 	}
 
 	id := newUser(t, db)
-	if _, err := Buy(ctx, db, id, markets[riser].id, "yes", 1); err != nil { // 75
+	if _, err := buyForTest(t, ctx, db, id, markets[riser].id, "yes", 1); err != nil { // 75
 		t.Fatal(err)
 	}
 

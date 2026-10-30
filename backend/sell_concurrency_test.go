@@ -15,7 +15,7 @@ func TestConcurrentSells(t *testing.T) {
 	marketID, _, _ := newMarket(t, db, 50, 5, 50)
 	userID := newUser(t, db)
 	// first i buy 10 contracts of yes
-	_, err := Buy(ctx, db, userID, marketID, "yes", 10)
+	_, err := buyForTest(t, ctx, db, userID, marketID, "yes", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestConcurrentSells(t *testing.T) {
 		go func() {
 			<-start
 
-			_, sellError := Sell(ctx, db, userID, marketID, "yes", 10)
+			_, sellError := sellForTest(t, ctx, db, userID, marketID, "yes", 10)
 			results <- sellError
 		}()
 	}

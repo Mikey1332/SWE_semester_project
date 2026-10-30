@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import Image from "next/image";
+import type { User } from "firebase/auth";
 import { AuthDialog, useOctaveUser } from "./auth-dialog";
 import { LedgerView } from "./ledger";
 import { auth } from "./firebase";
@@ -56,8 +57,12 @@ async function errorText(response: Response) {
     return (await response.text()).trim() || `Request failed (${response.status})`;
 }
 export default function Home() {
-    const [authMode, setAuthMode] = useState<"signup" | "login" | null>(null);
     const { user, logout } = useOctaveUser();
+    return <TradingPage key={user?.uid ?? "signed-out"} user={user} logout={logout} />;
+}
+
+function TradingPage({ user, logout }: { user: User | null; logout: () => Promise<void> }) {
+    const [authMode, setAuthMode] = useState<"signup" | "login" | null>(null);
     const [markets, setMarkets] = useState<LiveMarket[] | null>(null);
     const [loadError, setLoadError] = useState("");
     const [account, setAccount] = useState<Account | null>(null);

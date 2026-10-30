@@ -25,28 +25,28 @@ func findMatchingOrder(ctx context.Context, tx *sql.Tx, order Order) (Order, err
 	var bestPrice int64
 
 	for rows.Next() {
-		var o Order
+		var otherOrder Order
 
 		err = rows.Scan(
-			&o.ID, &o.UserID, &o.MarketID, &o.RequestID,
-			&o.Side, &o.Action, &o.Price, &o.Quantity,
-			&o.Remaining, &o.Cancelled,
+			&otherOrder.ID, &otherOrder.UserID, &otherOrder.MarketID, &otherOrder.RequestID,
+			&otherOrder.Side, &otherOrder.Action, &otherOrder.Price, &otherOrder.Quantity,
+			&otherOrder.Remaining, &otherOrder.Cancelled,
 		)
 		if err != nil {
 			return Order{}, err
 		}
 
-		price := o.Price
+		price := otherOrder.Price
 
-		if o.Side == order.Side {
-			if o.Action == order.Action {
+		if otherOrder.Side == order.Side {
+			if otherOrder.Action == order.Action {
 				continue
 			}
 		} else {
-			if o.Action != order.Action {
+			if otherOrder.Action != order.Action {
 				continue
 			}
-			price = 100 - o.Price
+			price = 100 - otherOrder.Price
 		}
 
 		if order.Action == "buy" && price > order.Price {
@@ -57,17 +57,17 @@ func findMatchingOrder(ctx context.Context, tx *sql.Tx, order Order) (Order, err
 		}
 
 		if bestMatch.ID == 0 {
-			bestMatch = o
+			bestMatch = otherOrder
 			bestPrice = price
 			continue
 		}
 
 		if order.Action == "buy" && price < bestPrice {
-			bestMatch = o
+			bestMatch = otherOrder
 			bestPrice = price
 		}
 		if order.Action == "sell" && price > bestPrice {
-			bestMatch = o
+			bestMatch = otherOrder
 			bestPrice = price
 		}
 	}

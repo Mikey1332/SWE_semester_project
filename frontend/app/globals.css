@@ -1907,13 +1907,25 @@ footer {
 .chart-source {
   width:335px;
   flex-shrink:0;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
   padding:14px 18px;
   border:1px solid var(--line);
   border-radius:10px;
   background:#fffdfa;
 }
 .billboard-logo {
+  width:150px;
   height:auto;
+}
+.chart-rank {
+  text-align:right;
+}
+.chart-rank strong {
+  margin-top:2px;
+  font-size:22px;
 }
 .chart-source span, .chart-source strong {
   display:block;

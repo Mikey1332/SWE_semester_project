@@ -327,8 +327,11 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
           <p>{selected.artist} <span className="dot-separator">·</span> Closes {closesLong(selected)}</p>
         </div>
         <div className="chart-source">
-          <Image src="/billboard-logo.svg" alt="Billboard Hot 100" width={190} height={40} className="billboard-logo"/>
-          <strong>Current rank #{selected.baseline_rank}</strong>
+          <Image src="/billboard-logo.svg" alt="Billboard Hot 100" width={150} height={32} className="billboard-logo"/>
+          <div className="chart-rank">
+            <span>Current rank</span>
+            <strong>#{selected.baseline_rank}</strong>
+          </div>
         </div>
       </div>
       <div className="detail-layout"><section className="chart-panel"><div className="chart-top"><div><span className="muted">{sideLabel(selected.baseline_rank, "yes")} estimate</span><strong>{selected.yes_price}% <small><Move market={selected}/></small></strong></div><span className="sample-badge">Hot 100 rank</span></div><div className="probability-chart"><div className="chart-grid"><span>#1</span><span>#25</span><span>#50</span><span>#75</span><span>#100</span></div><svg viewBox="0 0 700 240" preserveAspectRatio="none" role="img" aria-label={`${selected.title}'s Hot 100 rank over the last ${Math.max(selected.history.length, 1)} weeks, now #${selected.baseline_rank}`}><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop stopColor="#8e7bbc" stopOpacity=".24"/><stop offset="1" stopColor="#8e7bbc" stopOpacity="0"/></linearGradient></defs>{(() => { const line = rankPath(selected.history.length ? selected.history.map(h => h.rank) : [selected.baseline_rank], 700, 240, 0); return <><path d={`${line} V240 H0Z`} fill="url(#chartFill)"/><path d={line} stroke="#8c72b4" strokeWidth="3" fill="none" vectorEffect="non-scaling-stroke"/></>; })()}</svg></div><div className="chart-dates">{(selected.history.length ? selected.history : [{ chart_date: selected.chart_date, rank: selected.baseline_rank }]).map(h => <span key={h.chart_date}>{shortDate(h.chart_date)}</span>)}</div><div className="chart-bottom"><span>♫ {selected.volume.toLocaleString()} contracts traded</span><span>Settles on the {shortDate(selected.chart_date)} chart</span></div><div className="market-rules"><p>Winning contracts pay ♫ 100. Trading closes {closesLong(selected)}.</p></div></section>

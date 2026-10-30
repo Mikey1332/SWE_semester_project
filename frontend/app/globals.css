@@ -1912,6 +1912,9 @@ footer {
   border-radius:10px;
   background:#fffdfa;
 }
+.billboard-logo {
+  height:auto;
+}
 .chart-source span, .chart-source strong {
   display:block;
 }

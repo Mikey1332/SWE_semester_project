@@ -202,9 +202,9 @@ Project scaffolding, CI, the database schema, the Music Note ledger, and manual 
 
 ### Music Note ledger and limit orders
 
-The first Firebase sign-in creates a ledger account with 10,000 Music Notes. `GET /auth/me` returns the account balance, realized P&L and open positions. `GET /me/ledger` returns grants, fills and payouts.
+The first Firebase sign-in creates a ledger account with 10,000 Music Notes. `GET /auth/me` returns the account balance, realized P&L and open positions. `GET /me/ledger` returns grants, fills, payouts and refunds.
 
-A market asks whether a song reaches the target rank on its chart date. The bot's YES and NO prices are initial estimates; they are not guaranteed execution prices. The bot creates markets but does not currently place orders, so an order waits until another user supplies a match.
+A market asks whether a song will move UP or DOWN on its chart date. At rank 1 the choices are STAY and DOWN. The API stores UP/STAY as `yes` and DOWN as `no`. These are the only side mappings. The bot's prices are initial estimates; they are not guaranteed execution prices. The bot creates markets but does not currently place orders, so an order waits until another user supplies a match.
 
 `POST /markets/{id}/orders` accepts a signed-in user's order. For example:
 
@@ -221,5 +221,16 @@ Open buy orders reserve their maximum cost, and sell orders reserve their remain
 The backend uses a PostgreSQL transaction lock to serialize order placement, cancellation and settlement. It prevents competing trades from spending the same funds or contracts. It also limits concurrent throughput; the lock strategy should be revisited if actual load requires it. Contract ownership, ledger entries and trade records are stored in PostgreSQL.
 
 The bots run every 15 minutes to open markets and settle markets whose full Hot 100 chart has been ingested. A winning contract pays 100 notes. An absent song counts as rank 101. Migrations run automatically at backend startup. Add new numbered files to `backend/migrations/`; do not edit a migration that has already been applied.
+
+For ranks 2-100, an unchanged rank refunds each current holder's remaining position cost. Earlier sales remain final. At rank 1, an unchanged rank pays the STAY side 100 notes per contract. Actual refund ledger entries show Refunded; historical buys and sells do not claim to have received a refund.
+
+Migration 006 requires a database with no existing markets, because existing orders must retain their original rules. Keep the previous database and use a new development database:
+
+```bash
+createdb -h localhost -U jack octave_direction_dev
+export DATABASE_URL='postgres://jack@localhost:5432/octave_direction_dev?sslmode=disable'
+```
+
+Run the backend to apply migrations, import the chart with the ingestion instructions above, then restart the backend to generate markets immediately. Before switching databases, reconcile unfinished browser requests against the original backend and close other Octave tabs. Remove the localhost app's saved `octave-order-*` localStorage entries using browser developer tools; their market IDs belong to the previous database. Do not retry them against the new database.
 
 A previously reported frontend ESLint dependency vulnerability remains under review.

@@ -11,13 +11,13 @@ func TestSuggest(t *testing.T) {
 		ranks        []int
 		shift, price int
 	}{
-		{[]int{30, 25, 20}, 5, 75}, // steady riser: rise 5, it did twice in 2 weeks
-		{[]int{1}, -1, 50},         // debut, no history: fall 1 at even odds
-		{[]int{10, 1}, -9, 33},     // at #1 it can only fall
-		{[]int{10, 2}, 1, 66},      // can rise at most 1 spot from #2
-		{[]int{20, 30}, -10, 66},   // faller keeps falling
-		{[]int{50, 99}, -2, 66},    // from #99, falling off the chart is a 2-spot drop
-		{[]int{40, 45, 30}, 5, 50}, // median move size, latest direction
+		{[]int{30, 25, 20}, 1, 75},
+		{[]int{1}, 1, 50},
+		{[]int{10, 1}, 1, 50},
+		{[]int{10, 2}, 1, 66},
+		{[]int{20, 30}, 1, 33},
+		{[]int{50, 99}, 1, 33},
+		{[]int{40, 45, 30}, 1, 50},
 	} {
 		shift, price := suggest(c.ranks)
 		if shift != c.shift || price != c.price {
@@ -73,8 +73,8 @@ func TestBotsOpenAndResolve(t *testing.T) {
 		t.Fatalf("got %d markets, want one per song", len(markets))
 	}
 	for song, want := range map[int64]market{
-		riser: {markets[riser].id, 20, 5, 75, true},
-		debut: {markets[debut].id, 1, -1, 50, true},
+		riser: {markets[riser].id, 20, 1, 75, true},
+		debut: {markets[debut].id, 1, 1, 50, true},
 	} {
 		if markets[song] != want {
 			t.Fatalf("song %d market = %+v, want %+v", song, markets[song], want)
@@ -109,9 +109,24 @@ func TestBotsOpenAndResolve(t *testing.T) {
 			markets[song].id).Scan(&outcome); err != nil {
 			t.Fatal(err)
 		}
-		if outcome != "yes" {
-			t.Fatalf("song %d: outcome %q, want yes", song, outcome)
+		want := "yes"
+		if song == debut {
+			want = "no"
+		}
+		if outcome != want {
+			t.Fatalf("song %d: outcome %q, want %s", song, outcome, want)
 		}
 	}
 	checkUser(t, db, id, 10_025, 25) // paid 75, won 100
+}
+
+func TestSuggestPriceBounds(t *testing.T) {
+	var falling []int
+	for rank := 1; rank <= 100; rank++ {
+		falling = append(falling, rank)
+	}
+	_, price := suggest(falling)
+	if price < 1 || price > 99 {
+		t.Fatalf("price %d is outside 1 to 99", price)
+	}
 }

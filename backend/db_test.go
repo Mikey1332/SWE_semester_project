@@ -453,18 +453,18 @@ func TestBuyAndResolve(t *testing.T) {
 func TestResolveOffChart(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
-	marketID, _, chartDate := newMarket(t, db, 10, -20, 30) // YES = falls 20+ spots from #10
+	marketID, _, chartDate := newMarket(t, db, 10, -20, 30)
 	id := newUser(t, db)
 
-	if _, err := buyForTest(t, ctx, db, id, marketID, "yes", 5); err != nil { // 5 x 30
+	if _, err := buyForTest(t, ctx, db, id, marketID, "no", 5); err != nil {
 		t.Fatal(err)
 	}
-	fillChart(t, db, chartDate) // full chart without our song on it
+	fillChart(t, db, chartDate)
 
 	if err := Resolve(ctx, db, marketID); err != nil {
 		t.Fatal(err)
 	}
-	checkUser(t, db, id, 10_350, 350)
+	checkUser(t, db, id, 10_150, 150)
 }
 
 func TestBuyRejects(t *testing.T) {

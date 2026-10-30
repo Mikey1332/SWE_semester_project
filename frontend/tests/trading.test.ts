@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { artworkColor, entryLabels, entryResult, held, lastMove, marketQuestion, matchesFilter, monogram, parseQuantity, rankPath, sidePrice, sortMarkets, type Account, type LedgerEntry, type LiveMarket } from "../app/trading";
+import { artworkColor, entryLabels, entryResult, held, lastMove, marketQuestion, sideLabel, matchesFilter, monogram, parseQuantity, rankPath, sidePrice, sortMarkets, type Account, type LedgerEntry, type LiveMarket } from "../app/trading";
 
 const market: LiveMarket = {
     id: 7, title: "Golden", artist: "HUNTR/X", chart_date: "2026-10-31", baseline_rank: 12,
@@ -7,9 +7,12 @@ const market: LiveMarket = {
     history: [{ chart_date: "2026-10-17", rank: 17 }, { chart_date: "2026-10-24", rank: 12 }],
 };
 
-test("market question reads the bot's shift", () => {
-    expect(marketQuestion(market)).toBe("Will Golden rise 5+ spots from #12 on the 2026-10-31 chart?");
-    expect(marketQuestion({ ...market, shift: -1 })).toBe("Will Golden fall 1+ spot from #12 on the 2026-10-31 chart?");
+test("direction questions and labels", () => {
+    expect(marketQuestion(market)).toBe("Will Golden go up or down from #12 on October 31, 2026?");
+    expect(marketQuestion({ ...market, baseline_rank: 1 })).toBe("Will Golden stay at #1 or go down on October 31, 2026?");
+    expect(sideLabel(1, "yes")).toBe("STAY");
+    expect(sideLabel(3, "yes")).toBe("UP");
+    expect(sideLabel(3, "no")).toBe("DOWN");
 });
 
 test("price and holdings per side", () => {
@@ -37,6 +40,9 @@ test("ledger entries show how their contracts turned out", () => {
     expect(entryResult({ ...base, market_status: "resolved", outcome: "no" })).toBe("Lost");
     expect(entryResult({ ...base, kind: "grant", side: null, market_id: null, market_status: null })).toBe("");
     expect(entryLabels.sell).toBe("Sold");
+    expect(entryResult({ ...base, kind: "sell", market_status: "resolved", outcome: "refund" })).toBe("");
+    expect(entryResult({ ...base, kind: "buy", market_status: "resolved", outcome: "refund" })).toBe("");
+    expect(entryResult({ ...base, kind: "refund", market_status: "resolved", outcome: "refund" })).toBe("Refunded");
 });
 
 test("cards show the artist's initials in a stable color", () => {

@@ -1704,6 +1704,8 @@ footer {
   }
 }
 
+
+
 /* Keep the original music-note wordmark at its natural proportions. */
 .brand-logo {
   width:110px;
@@ -1894,3 +1896,50 @@ footer {
     width:auto;
   }
 }
+
+.auth-error {
+  color: #b42318;
+}
+.detail-heading-info {
+  flex:1;
+  min-width:0;
+}
+.chart-source {
+  width:335px;
+  flex-shrink:0;
+  padding:14px 18px;
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:#fffdfa;
+}
+.chart-source span, .chart-source strong {
+  display:block;
+}
+.chart-source span {
+  color:#777b72;
+  font-size:11px;
+}
+.chart-source strong {
+  margin-top:6px;
+  color:#292e29;
+  font-size:14px;
+}
+@media(max-width:1150px) {
+  .chart-source {
+    width:300px;
+  }
+}
+@media(max-width:850px) {
+  .detail-heading {
+    flex-wrap:wrap;
+  }
+  .chart-source {
+    width:100%;
+  }
+}
+
+.open-order { border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:10px; }
+.open-order>span { display:block; }
+.open-order>span>span { display:block; margin-top:6px; font-size:12px; color:#666d60; }
+.open-order .text-button { color:#9b3026; }
+.ledger-result.refunded { background:#eee7f6; color:#665281; }

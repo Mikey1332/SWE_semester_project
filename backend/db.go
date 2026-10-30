@@ -161,39 +161,63 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 		return err
 	}
 
-	moved := baseline - rank // positive = rose
-	outcome := "no"
-	if (shift > 0 && moved >= shift) || (shift < 0 && moved <= shift) {
+	outcome := "refund"
+	if baseline == 1 && rank == 1 {
 		outcome = "yes"
+	} else if rank < baseline {
+		outcome = "yes"
+	} else if rank > baseline {
+		outcome = "no"
 	}
 
-	type win struct{ userID, quantity int64 }
-	var wins []win
-	rows, err := tx.QueryContext(ctx,
-		`SELECT user_id, quantity FROM positions WHERE market_id = $1 AND side = $2
-		 ORDER BY user_id`, marketID, outcome) // fixed lock order, so concurrent Resolves can't deadlock
+	type payment struct {
+		userID        int64
+		side          string
+		quantity      int64
+		remainingCost int64
+	}
+	var payments []payment
+	rows, err := tx.QueryContext(ctx, `
+        SELECT user_id, side, quantity, cost_basis FROM positions
+        WHERE market_id = $1 AND (side = $2 OR $2 = 'refund')
+        ORDER BY user_id, side
+    `, marketID, outcome)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
-		var w win
-		if err := rows.Scan(&w.userID, &w.quantity); err != nil {
+		var holder payment
+		err = rows.Scan(&holder.userID, &holder.side, &holder.quantity, &holder.remainingCost)
+		if err != nil {
 			rows.Close()
 			return err
 		}
-		wins = append(wins, w)
+		payments = append(payments, holder)
 	}
 	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
+	if rows.Err() != nil {
+		return rows.Err()
 	}
-
-	for _, w := range wins {
-		if _, err := Post(ctx, tx, Entry{UserID: w.userID, Amount: w.quantity * ContractPayout, Kind: "payout", MarketID: &marketID,
-			Side: outcome, Quantity: w.quantity, Price: ContractPayout}); err != nil {
+	for _, holder := range payments {
+		entry := Entry{
+			UserID:   holder.userID,
+			MarketID: &marketID,
+			Side:     holder.side,
+			Quantity: holder.quantity,
+			Amount:   holder.quantity * ContractPayout,
+			Kind:     "payout",
+			Price:    ContractPayout,
+		}
+		if outcome == "refund" {
+			entry.Amount = holder.remainingCost
+			entry.Kind = "refund"
+			entry.Price = 0
+		}
+		if _, err := Post(ctx, tx, entry); err != nil {
 			return err
 		}
 	}
+
 	_, err = tx.ExecContext(ctx, `UPDATE orders SET cancelled = true WHERE market_id = $1 AND remaining > 0`, marketID)
 	if err != nil {
 		return err

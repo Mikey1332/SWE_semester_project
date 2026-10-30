@@ -18,10 +18,27 @@ export type Account = { balance: number; realized_pnl: number; positions: Positi
 export type TradeSide = "yes" | "no";
 export type TradeAction = "buy" | "sell";
 
-// "Will Golden rise 5+ spots from #12 on the 2026-10-31 chart?"
-export function marketQuestion(m: Pick<LiveMarket, "title" | "shift" | "baseline_rank" | "chart_date">): string {
-    const move = m.shift > 0 ? `rise ${m.shift}+` : `fall ${-m.shift}+`;
-    return `Will ${m.title} ${move} spot${Math.abs(m.shift) === 1 ? "" : "s"} from #${m.baseline_rank} on the ${m.chart_date} chart?`;
+export function marketQuestion(
+    m: { title: string; baseline_rank: number; chart_date: string }
+): string {
+    const date = new Date(m.chart_date + "T12:00:00");
+
+    const formattedDate = date.toLocaleDateString("en-US", {
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+    });
+
+    if (m.baseline_rank === 1) {
+        return `Will ${m.title} stay at #1 or go down on ${formattedDate}?`;
+    }
+    return `Will ${m.title} go up or down from #${m.baseline_rank} on ${formattedDate}?`;
+}
+
+export function sideLabel(rank: number, side: TradeSide): string {
+    if (side === "no") return "DOWN";
+    if (rank === 1) return "STAY";
+    return "UP";
 }
 
 export function sidePrice(m: LiveMarket, side: TradeSide): number {
@@ -43,7 +60,7 @@ export function parseQuantity(text: string): number | null {
 export type LedgerEntry = {
     id: number;
     created_at: string;
-    kind: "grant" | "buy" | "sell" | "payout";
+    kind: "grant" | "buy" | "sell" | "payout" | "refund";
     amount: number;
     balance_after: number;
     side: TradeSide | null;
@@ -56,17 +73,21 @@ export type LedgerEntry = {
     baseline_rank: number | null;
     shift: number | null;
     market_status: "open" | "resolved" | null;
-    outcome: TradeSide | null;
+    outcome: TradeSide | "refund" | null;
 };
 
-export const entryLabels: Record<LedgerEntry["kind"], string> = { grant: "Starting balance", buy: "Bought", sell: "Sold", payout: "Payout" };
+export const entryLabels: Record<LedgerEntry["kind"], string> = { grant: "Starting balance", buy: "Bought", sell: "Sold", payout: "Payout", refund: "Refund" };
 
 // How the contracts in an entry turned out: still open, or won/lost once the market resolved.
-export function entryResult(e: LedgerEntry): "Open" | "Won" | "Lost" | "" {
+export function entryResult(e: LedgerEntry): "Open" | "Won" | "Lost" | "Refunded" | "" {
     if (!e.market_status || !e.side)
         return "";
     if (e.market_status !== "resolved")
         return "Open";
+    if (e.outcome === "refund") {
+        if (e.kind === "refund") return "Refunded";
+        return "";
+    }
     return e.outcome === e.side ? "Won" : "Lost";
 }
 

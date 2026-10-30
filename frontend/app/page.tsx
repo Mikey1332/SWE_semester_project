@@ -6,7 +6,7 @@ import { AuthDialog, useOctaveUser } from "./auth-dialog";
 import { LedgerView } from "./ledger";
 import { auth } from "./firebase";
 import { readUnfinishedOrders, removeUnfinishedOrder, saveUnfinishedOrder, type UnfinishedOrder } from "./order-retry";
-import { MARKET_FILTERS, MARKET_SORTS, artworkColor, held, lastMove, marketQuestion, matchesFilter, monogram, parseQuantity, rankPath, sidePrice, sortMarkets, type Account, type LiveMarket, type MarketFilter, type MarketSort, type TradeAction, type TradeSide } from "./trading";
+import { MARKET_FILTERS, MARKET_SORTS, artworkColor, held, lastMove, marketQuestion, matchesFilter, monogram, parseQuantity, rankPath, sidePrice, sideLabel, sortMarkets, type Account, type LiveMarket, type MarketFilter, type MarketSort, type TradeAction, type TradeSide } from "./trading";
 type PendingOrder = {
     id: number;
     market_id: number;
@@ -47,11 +47,9 @@ function Move({ market }: { market: LiveMarket }) {
 const closesShort = (m: LiveMarket) => new Date(m.closes_at).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
 const closesLong = (m: LiveMarket) => new Date(m.closes_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 const shortDate = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString([], { month: "short", day: "numeric" });
-function yesTarget(m: LiveMarket): string {
-    if (m.shift > 0)
-        return `#${m.baseline_rank - m.shift} or higher`;
-    const target = m.baseline_rank - m.shift;
-    return target > 100 ? "off the chart" : `#${target} or lower (or off the chart)`;
+function marketRules(rank: number): string {
+    if (rank === 1) return "STAY wins if the song stays at #1. DOWN wins if it falls.";
+    return "UP wins if the rank number gets smaller. DOWN wins if it gets larger. If it stays the same, current holders receive the purchase cost of their remaining contracts back.";
 }
 async function errorText(response: Response) {
     return (await response.text()).trim() || `Request failed (${response.status})`;
@@ -319,15 +317,25 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
     <main>
       {user && unfinishedOrders.filter(order => order.user_id === user.uid).map(order => (
         <div key={order.request_id} role="status">
-          <span>Unconfirmed order: {order.action.toUpperCase()} {order.quantity} {order.side.toUpperCase()} at ♫ {order.price} for market {order.market_id}. </span>
+          <span>Unconfirmed order: {order.action.toUpperCase()} {order.quantity} {order.side === "yes" ? "UP/STAY" : "DOWN"} at ♫ {order.price} for market {order.market_id}. </span>
           <button className="text-button" disabled={busy} onClick={() => void submitOrder(order)}>Retry (may place order)</button>
         </div>
       ))}
       {!selected && orderMessage && <p role="status">{orderMessage}</p>}
-      {ledger ? <LedgerView key={user?.uid ?? "signed-out"} user={user} onSignUp={() => setAuthMode("signup")}/> : info ? <section className="how-panel"><span className="eyebrow">A LITTLE MUSIC. A LITTLE INSTINCT.</span><h1>Your taste. Your edge.</h1><p>Predict what happens next on the Billboard Hot 100 using virtual Music Notes. Everyone starts with ♫ 10,000.</p><div className="how-steps"><article><b>01</b><h2>Find your track</h2><p>Every week a market opens for each song on the latest Hot 100, asking whether it will move a set number of spots on the next chart.</p></article><article><b>02</b><h2>Make your call</h2><p>Buy YES or NO contracts. Prices run from ♫ 1 to ♫ 99, and YES plus NO always cost ♫ 100. Place a sell order before trading closes; it fills when a matching buyer is available.</p></article><article><b>03</b><h2>Follow the charts</h2><p>When the next chart is in, markets settle automatically: every winning contract pays ♫ 100. Track it all in My ledger.</p></article></div><button className="primary" onClick={() => setInfo(false)}>Explore the markets →</button></section> : selected ? <>
+      {ledger ? <LedgerView key={user?.uid ?? "signed-out"} user={user} onSignUp={() => setAuthMode("signup")}/> : info ? <section className="how-panel"><span className="eyebrow">A LITTLE MUSIC. A LITTLE INSTINCT.</span><h1>Your taste. Your edge.</h1><p>Predict what happens next on the Billboard Hot 100 using virtual Music Notes. Everyone starts with ♫ 10,000.</p><div className="how-steps"><article><b>01</b><h2>Find your track</h2><p>Every week a market opens for each song on the latest Hot 100, asking whether it will go up or down on the next chart.</p></article><article><b>02</b><h2>Make your call</h2><p>Buy UP or DOWN contracts. At #1, choose STAY or DOWN. Prices run from ♫ 1 to ♫ 99, and both sides together cost ♫ 100. Place a sell order before trading closes; it fills when a matching buyer is available.</p></article><article><b>03</b><h2>Follow the charts</h2><p>When the next chart is in, markets settle automatically: every winning contract pays ♫ 100. Unchanged ranks are refunded except at #1, where STAY wins. Track it all in My ledger.</p></article></div><button className="primary" onClick={() => setInfo(false)}>Explore the markets →</button></section> : selected ? <>
       <button className="back-link" onClick={() => setSelectedId(null)}>← All markets</button>
-      <div className="detail-heading"><Artwork market={selected}/><div><span className="eyebrow">BILLBOARD HOT 100 · NOW #{selected.baseline_rank}</span><h1>{marketQuestion(selected)}</h1><p>{selected.artist} <span className="dot-separator">·</span> Closes {closesLong(selected)}</p></div></div>
-      <div className="detail-layout"><section className="chart-panel"><div className="chart-top"><div><span className="muted">YES estimate</span><strong>{selected.yes_price}% <small><Move market={selected}/></small></strong></div><span className="sample-badge">Hot 100 rank</span></div><div className="probability-chart"><div className="chart-grid"><span>#1</span><span>#25</span><span>#50</span><span>#75</span><span>#100</span></div><svg viewBox="0 0 700 240" preserveAspectRatio="none" role="img" aria-label={`${selected.title}'s Hot 100 rank over the last ${Math.max(selected.history.length, 1)} weeks, now #${selected.baseline_rank}`}><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop stopColor="#8e7bbc" stopOpacity=".24"/><stop offset="1" stopColor="#8e7bbc" stopOpacity="0"/></linearGradient></defs>{(() => { const line = rankPath(selected.history.length ? selected.history.map(h => h.rank) : [selected.baseline_rank], 700, 240, 0); return <><path d={`${line} V240 H0Z`} fill="url(#chartFill)"/><path d={line} stroke="#8c72b4" strokeWidth="3" fill="none" vectorEffect="non-scaling-stroke"/></>; })()}</svg></div><div className="chart-dates">{(selected.history.length ? selected.history : [{ chart_date: selected.chart_date, rank: selected.baseline_rank }]).map(h => <span key={h.chart_date}>{shortDate(h.chart_date)}</span>)}</div><div className="chart-bottom"><span>♫ {selected.volume.toLocaleString()} contracts traded</span><span>Settles on the {shortDate(selected.chart_date)} chart</span></div><div className="market-rules"><h3>The fine print, in tune.</h3><p>YES wins if {selected.title} is {yesTarget(selected)} on the Hot 100 dated {selected.chart_date}; it is #{selected.baseline_rank} now. NO wins otherwise. A song missing from that chart counts as #101.</p><p>Each winning contract pays ♫ 100 and losing contracts pay nothing. Trading closes {closesLong(selected)}, and the market settles automatically once the full chart is loaded.</p><p>Source: Billboard Hot 100 · Virtual Music Notes only</p></div></section>
+      <div className="detail-heading">
+        <Artwork market={selected}/>
+        <div className="detail-heading-info">
+          <h1>{marketQuestion(selected)}</h1>
+          <p>{selected.artist} <span className="dot-separator">·</span> Closes {closesLong(selected)}</p>
+        </div>
+        <div className="chart-source">
+          <span>Billboard Hot 100</span>
+          <strong>Current rank #{selected.baseline_rank}</strong>
+        </div>
+      </div>
+      <div className="detail-layout"><section className="chart-panel"><div className="chart-top"><div><span className="muted">{sideLabel(selected.baseline_rank, "yes")} estimate</span><strong>{selected.yes_price}% <small><Move market={selected}/></small></strong></div><span className="sample-badge">Hot 100 rank</span></div><div className="probability-chart"><div className="chart-grid"><span>#1</span><span>#25</span><span>#50</span><span>#75</span><span>#100</span></div><svg viewBox="0 0 700 240" preserveAspectRatio="none" role="img" aria-label={`${selected.title}'s Hot 100 rank over the last ${Math.max(selected.history.length, 1)} weeks, now #${selected.baseline_rank}`}><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop stopColor="#8e7bbc" stopOpacity=".24"/><stop offset="1" stopColor="#8e7bbc" stopOpacity="0"/></linearGradient></defs>{(() => { const line = rankPath(selected.history.length ? selected.history.map(h => h.rank) : [selected.baseline_rank], 700, 240, 0); return <><path d={`${line} V240 H0Z`} fill="url(#chartFill)"/><path d={line} stroke="#8c72b4" strokeWidth="3" fill="none" vectorEffect="non-scaling-stroke"/></>; })()}</svg></div><div className="chart-dates">{(selected.history.length ? selected.history : [{ chart_date: selected.chart_date, rank: selected.baseline_rank }]).map(h => <span key={h.chart_date}>{shortDate(h.chart_date)}</span>)}</div><div className="chart-bottom"><span>♫ {selected.volume.toLocaleString()} contracts traded</span><span>Settles on the {shortDate(selected.chart_date)} chart</span></div><div className="market-rules"><h3>The fine print, in tune.</h3><p>{marketRules(selected.baseline_rank)} A song leaving the Hot 100 counts as #101.</p><p>Winning contracts pay ♫ 100. Earlier sales stay final. Trading closes {closesLong(selected)}.</p><p>Source: Billboard Hot 100</p></div></section>
       <aside className="order-panel">
         <div className="order-heading">
           <h2>Make your call</h2>
@@ -351,7 +359,7 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
               setOrderMessage("");
             }}
           >
-            YES <b>♫ {selected.yes_price}</b>
+            {sideLabel(selected.baseline_rank, "yes")} <b>♫ {selected.yes_price}</b>
           </button>
           <button
             className={side === "no" ? "down chosen" : "down"}
@@ -361,7 +369,7 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
               setOrderMessage("");
             }}
           >
-            NO <b>♫ {selected.no_price}</b>
+            DOWN <b>♫ {selected.no_price}</b>
           </button>
         </div>
 
@@ -402,9 +410,9 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
         <dl className="order-summary">
           <div><dt>Limit price</dt><dd>{validPrice ? `♫ ${price}` : "—"}</dd></div>
           <div><dt>Limit total</dt><dd>{count && validPrice ? `♫ ${(price * count).toLocaleString()}` : "—"}</dd></div>
-          <div><dt>You hold</dt><dd>{holding.toLocaleString()} {side.toUpperCase()}</dd></div>
+          <div><dt>You hold</dt><dd>{holding.toLocaleString()} {sideLabel(selected.baseline_rank, side)}</dd></div>
           <div className="payout">
-            <dt>Potential payout <small>if {side.toUpperCase()} wins</small></dt>
+            <dt>Potential payout <small>if {sideLabel(selected.baseline_rank, side)} wins</small></dt>
             <dd>♫ {count ? (count * 100).toLocaleString() : 0}</dd>
           </div>
         </dl>
@@ -414,7 +422,7 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
           disabled={busy || count === null || !validPrice}
           onClick={() => void trade("buy")}
         >
-          {user ? `Buy ${side.toUpperCase()}` : "Sign up to trade"} <span>↗</span>
+          {user ? `Buy ${sideLabel(selected.baseline_rank, side)}` : "Sign up to trade"} <span>↗</span>
         </button>
 
         {user && (
@@ -423,16 +431,17 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
             disabled={busy || count === null || !validPrice || holding < count}
             onClick={() => void trade("sell")}
           >
-            Sell {side.toUpperCase()} <span>↙</span>
+            Sell {sideLabel(selected.baseline_rank, side)} <span>↙</span>
           </button>
         )}
 
         {user && <button className="text-button" disabled={busy} onClick={() => void refreshOrders()}>Refresh orders</button>}
 
         {orders.filter(order => order.market_id === selected.id).map(order => (
-          <div key={order.id}>
+          <div className="open-order" key={order.id}>
             <span>
-              {order.action.toUpperCase()} {order.remaining} {order.side.toUpperCase()} at ♫ {order.price}{" "}
+              <strong>{order.action.toUpperCase()} {sideLabel(selected.baseline_rank, order.side)}</strong>
+              <span>♫ {order.price} each · {order.remaining} waiting</span>
             </span>
             <button
               className="text-button"
@@ -445,14 +454,13 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
         ))}
 
         <p role="status" className="order-status">{orderMessage}</p>
-        <p className="order-disclaimer">All instinct. No real money.<br />Virtual Music Notes only.</p>
       </aside></div>
       </> : <>
       {!watchlist && <section className="hero"><div className="hero-copy"><h1>Good taste.<br />Better <span>predictions.</span></h1><p>Think you know the charts? Hope you don&apos;t fall flat!</p><div className="hero-actions"><a className="primary" href="#markets">Explore markets <span>↗</span></a><button className="primary secondary" onClick={() => setInfo(true)}>How it works <span>↗</span></button></div></div><div className="hero-art" aria-hidden="true"><span className="orbit orbit-one"/><span className="orbit orbit-two"/><span className="floating-note note-one">♪</span><span className="floating-note note-two">✳</span><div className="record-sleeve"><span className="sleeve-top">OCTAVE RECORDS <span>VOL. 001</span></span><div className="vinyl"><span className="vinyl-label">octave.<small>SIDE A · TRUST YOUR TASTE</small><i /></span></div></div><div className="floating-pill"><span className="pill-icon">↗</span><div>Your next favorite hit.<small>Your next great prediction.</small></div><HeroSparkline /></div><span className="art-caption">SOUNDS LIKE A GOOD CALL.</span></div></section>}
       <section className="market-section" id="markets"><div className="section-heading"><div><span className="eyebrow">THE NEXT HIT IS YOUR CALL</span><h2>Find your next move<span className="purple-dot">.</span></h2></div><span className="week-label"><Icon name="clock" size={15}/> Weekly markets{chartDate && <> · settle on the {shortDate(chartDate)} chart</>} <span className="sample-badge">{all.length} live</span></span></div><div className="market-toolbar"><div className="filters" role="group" aria-label="Filter markets">{MARKET_FILTERS.map(f => <button key={f} aria-pressed={filter === f} className={filter === f ? "active" : ""} onClick={() => setFilter(f)}>{f === "Rising" ? "↗ " : f === "Falling" ? "↘ " : f === "New entries" ? "✳ " : ""}{f}</button>)}{filter === "Watchlist" && <button className="active">Watchlist</button>}</div><div className="search-sort"><label className="search-box"><Icon name="search" size={17}/><input aria-label="Search songs or artists" placeholder="Search songs or artists" value={search} onChange={e => setSearch(e.target.value)}/></label><select aria-label="Sort markets" value={sort} onChange={e => setSort(e.target.value as MarketSort)}>{MARKET_SORTS.map(s => <option key={s}>{s}</option>)}</select></div></div>
       {loadError ? <div className="empty-state"><Icon name="music" size={32}/><h3>Markets are unavailable.</h3><p>{loadError}</p></div>
         : markets === null ? <div className="empty-state"><Icon name="music" size={32}/><h3>Loading markets…</h3></div>
-        : <><div className="market-grid">{visible.map(m => <article className="market-card" key={m.id}><div className="card-top"><Artwork market={m}/><div className="song-info"><span>Hot 100 <span className="tiny-dot">·</span> Now #{m.baseline_rank}</span><button onClick={() => openMarket(m)}>{m.title}</button><p>{m.artist}</p></div><button className={`save-button ${saved.includes(m.id) ? "saved" : ""}`} aria-label={`${saved.includes(m.id) ? "Remove" : "Save"} ${m.title} ${saved.includes(m.id) ? "from" : "to"} watchlist`} aria-pressed={saved.includes(m.id)} onClick={() => setSaved(saved.includes(m.id) ? saved.filter(id => id !== m.id) : [...saved, m.id])}><Icon name="star" size={18}/></button></div><button className="market-question" onClick={() => openMarket(m)}>{marketQuestion(m)}</button><div className="chance-row"><div><strong>{m.yes_price}<span>%</span></strong><span className="chance-caption">bot estimate</span></div><div className="sparkline-box"><Sparkline market={m}/><Move market={m}/></div></div><div className="card-trades"><button className="up" onClick={() => openMarket(m, "yes")}><span>YES</span><b>♫ {m.yes_price}</b></button><button className="down" onClick={() => openMarket(m, "no")}><span>NO</span><b>♫ {m.no_price}</b></button></div><div className="card-footer"><span>♫ {m.volume.toLocaleString()} contracts</span><span>Closes <b>{closesShort(m)}</b></span></div></article>)}</div>
+        : <><div className="market-grid">{visible.map(m => <article className="market-card" key={m.id}><div className="card-top"><Artwork market={m}/><div className="song-info"><span>Hot 100 <span className="tiny-dot">·</span> Now #{m.baseline_rank}</span><button onClick={() => openMarket(m)}>{m.title}</button><p>{m.artist}</p></div><button className={`save-button ${saved.includes(m.id) ? "saved" : ""}`} aria-label={`${saved.includes(m.id) ? "Remove" : "Save"} ${m.title} ${saved.includes(m.id) ? "from" : "to"} watchlist`} aria-pressed={saved.includes(m.id)} onClick={() => setSaved(saved.includes(m.id) ? saved.filter(id => id !== m.id) : [...saved, m.id])}><Icon name="star" size={18}/></button></div><button className="market-question" onClick={() => openMarket(m)}>{marketQuestion(m)}</button><div className="chance-row"><div><strong>{m.yes_price}<span>%</span></strong><span className="chance-caption">bot estimate</span></div><div className="sparkline-box"><Sparkline market={m}/><Move market={m}/></div></div><div className="card-trades"><button className="up" onClick={() => openMarket(m, "yes")}><span>{sideLabel(m.baseline_rank, "yes")}</span><b>♫ {m.yes_price}</b></button><button className="down" onClick={() => openMarket(m, "no")}><span>DOWN</span><b>♫ {m.no_price}</b></button></div><div className="card-footer"><span>♫ {m.volume.toLocaleString()} contracts</span><span>Closes <b>{closesShort(m)}</b></span></div></article>)}</div>
         {!visible.length && <div className="empty-state"><Icon name="music" size={32}/><h3>{all.length ? "No tracks here yet." : "No open markets yet."}</h3><p>{!all.length ? "Markets open once the bots read a full Hot 100 chart." : watchlist ? "Tap a star on a market to save it to your watchlist." : "Try another artist, song, or filter."}</p>{all.length > 0 && <button className="text-button" onClick={() => { setSearch(""); setFilter("All markets"); setWatchlist(false); }}>See all markets →</button>}</div>}</>}
       </section><section className="join-banner"><span className="join-icon">✳</span><div><h2>A good ear deserves a little credit.</h2><p>Follow the charts. Make your predictions. Find your edge.</p></div><button className="primary" onClick={() => user ? setInfo(true) : setAuthMode("signup")}>{user ? "How it works" : "Join the next wave"} ↗</button></section>
       </>}

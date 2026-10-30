@@ -1946,3 +1946,21 @@ footer {
 .open-order>span>span { display:block; margin-top:6px; font-size:12px; color:#666d60; }
 .open-order .text-button { color:#9b3026; }
 .ledger-result.refunded { background:#eee7f6; color:#665281; }
+
+@media(min-width:851px) {
+  .detail-heading {
+    margin-bottom:0;
+  }
+  .chart-source {
+    border-radius:10px 10px 0 0;
+    border-bottom:0;
+  }
+  .detail-layout .order-panel {
+    border-radius:0 0 10px 10px;
+  }
+}
+.order-heading>span {
+  font-size:14px;
+  font-weight:600;
+  color:#292e29;
+}

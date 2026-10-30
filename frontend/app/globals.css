@@ -17,7 +17,8 @@
   box-sizing:border-box
 }
 html {
-  scroll-behavior:smooth
+  scroll-behavior:smooth;
+  zoom:1.25
 }
 body {
   margin:0;
@@ -1704,6 +1705,8 @@ footer {
   }
 }
 
+
+
 /* Keep the original music-note wordmark at its natural proportions. */
 .brand-logo {
   width:110px;
@@ -1841,4 +1844,136 @@ html {
   .balance-chip {
     display:none
   }
+}
+
+.header nav button {
+  color:#60645a;
+}
+footer {
+  display:grid;
+  grid-template-columns:1fr auto 1fr;
+}
+.footer-right {
+  margin-left:0;
+  justify-self:end;
+}
+.art-caption {
+  left:50%;
+  transform:translateX(-50%);
+  white-space:nowrap;
+}
+@media(max-width:850px) {
+  .header {
+    height:auto;
+    min-height:78px;
+    flex-wrap:wrap;
+    gap:0 20px;
+    padding-top:12px;
+  }
+  .header nav {
+    order:3;
+    width:100%;
+    height:42px;
+    overflow-x:auto;
+  }
+  .header nav button {
+    flex-shrink:0;
+  }
+  .header nav button:nth-child(2),
+  .header nav button:nth-child(3) {
+    display:block;
+  }
+}
+@media(max-width:580px) {
+  footer {
+    grid-template-columns:1fr auto;
+  }
+  .footer-tagline {
+    grid-column:1 / -1;
+    grid-row:2;
+    text-align:center;
+  }
+  .footer-right {
+    width:auto;
+  }
+}
+
+.auth-error {
+  color: #b42318;
+}
+.detail-heading-info {
+  flex:1;
+  min-width:0;
+}
+.chart-source {
+  width:335px;
+  flex-shrink:0;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  padding:14px 18px;
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:#fffdfa;
+}
+.billboard-logo {
+  width:150px;
+  height:auto;
+}
+.chart-rank {
+  text-align:right;
+}
+.chart-rank strong {
+  margin-top:2px;
+  font-size:22px;
+}
+.chart-source span, .chart-source strong {
+  display:block;
+}
+.chart-source span {
+  color:#777b72;
+  font-size:11px;
+}
+.chart-source strong {
+  margin-top:6px;
+  color:#292e29;
+  font-size:14px;
+}
+@media(max-width:1150px) {
+  .chart-source {
+    width:300px;
+  }
+}
+@media(max-width:850px) {
+  .detail-heading {
+    flex-wrap:wrap;
+  }
+  .chart-source {
+    width:100%;
+  }
+}
+
+.open-order { border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:10px; }
+.open-order>span { display:block; }
+.open-order>span>span { display:block; margin-top:6px; font-size:12px; color:#666d60; }
+.open-order .text-button { color:#9b3026; }
+.ledger-result.refunded { background:#eee7f6; color:#665281; }
+
+@media(min-width:851px) {
+  .detail-heading {
+    margin-bottom:0;
+  }
+  .chart-source {
+    border-radius:10px 10px 0 0;
+    border-bottom:0;
+  }
+  .detail-layout .order-panel {
+    border-radius:0 0 10px 10px;
+  }
+}
+.order-heading>span {
+  font-size:14px;
+  font-weight:600;
+  color:#292e29;
 }

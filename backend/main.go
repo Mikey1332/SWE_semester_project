@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -63,47 +62,6 @@ func signedIn(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 
-// trade handles a signed-in buy or sell of a market's contracts.
-func trade(db *sql.DB, action string,
-	do func(context.Context, *sql.DB, int64, int64, string, int64) (int64, error)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := signedIn(w, r)
-		if !ok {
-			return
-		}
-		if db == nil {
-			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
-			return
-		}
-		marketID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
-			http.Error(w, "invalid market id", http.StatusBadRequest)
-			return
-		}
-		var req struct {
-			Side     string `json:"side"`
-			Quantity int64  `json:"quantity"`
-		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON body", http.StatusBadRequest)
-			return
-		}
-
-		balance, err := do(r.Context(), db, userID, marketID, req.Side, req.Quantity)
-		switch {
-		case errors.Is(err, ErrInvalidOrder):
-			http.Error(w, err.Error(), http.StatusBadRequest)
-		case errors.Is(err, ErrMarketClosed), errors.Is(err, ErrInsufficientFunds), errors.Is(err, ErrNotEnoughContracts):
-			http.Error(w, err.Error(), http.StatusConflict)
-		case err != nil:
-			log.Printf("%s market %d user %d: %v", action, marketID, userID, err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-		default:
-			writeJSON(w, map[string]int64{"balance": balance})
-		}
-	}
-}
-
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
@@ -142,8 +100,8 @@ func routes(db *sql.DB) http.Handler {
 		rows, err := db.QueryContext(r.Context(), `
 			SELECT m.id, s.title, s.artist, m.chart_date::text, m.baseline_rank, m.shift,
 			       m.yes_price, $1 - m.yes_price, m.closes_at,
-			       coalesce((SELECT sum(l.quantity) FROM ledger_entries l
-			                 WHERE l.market_id = m.id AND l.kind = 'buy'), 0),
+			       coalesce((SELECT sum(t.quantity) FROM trades t
+			                 JOIN orders o ON o.id = t.taker_id WHERE o.market_id = m.id), 0),
 			       coalesce((SELECT json_agg(json_build_object('chart_date', h.chart_date::text, 'rank', h.rank)
 			                                 ORDER BY h.chart_date)
 			                 FROM (SELECT chart_date, rank FROM chart_snapshots c
@@ -293,9 +251,15 @@ func routes(db *sql.DB) http.Handler {
 		writeJSON(w, entries)
 	})
 
-	// Body: {"side": "yes" | "no", "quantity": n}. Returns {"balance": n}.
-	mux.HandleFunc("POST /markets/{id}/buy", trade(db, "buy", Buy))
-	mux.HandleFunc("POST /markets/{id}/sell", trade(db, "sell", Sell))
+	mux.HandleFunc("POST /markets/{id}/orders", func(w http.ResponseWriter, r *http.Request) {
+		orderHandler(w, r, db)
+	})
+	mux.HandleFunc("GET /me/orders", func(w http.ResponseWriter, r *http.Request) {
+		listOrders(w, r, db)
+	})
+	mux.HandleFunc("POST /orders/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		cancelOrder(w, r, db)
+	})
 
 	return mux
 }

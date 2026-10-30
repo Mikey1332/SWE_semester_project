@@ -94,6 +94,8 @@ With `DATABASE_URL` set, migrations run automatically on startup. Run this befor
 
 Open http://localhost:8080/health; expect `{"status":"ok"}`. Stop with Ctrl+C.
 
+Tests for the database use a separate PostgreSQL db, otherwise test data is added to our actual application's db. To run tests, set TEST_DATABASE_URL to a db whose name includes `test`. If you don't then the  tests get skipped. Also the test URL needs to be different from the real DATABASE_URL.
+
 Checks from `backend/`:
 
 ```bash
@@ -101,7 +103,6 @@ go vet ./...
 go test ./...
 ```
 
-Without `DATABASE_URL`, the server skips database setup and database tests are skipped. The health endpoint alone does not verify the database connection.
 
 ### Frontend
 
@@ -117,7 +118,7 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000). Stop with Ctrl+C. For later sessions, run `npm run dev` from `frontend/`; repeat `npm ci` when dependencies change. The page reloads automatically as you edit UI files.
 
-The Discover page lists the bots' real open markets from `GET /markets` as cards: chance of YES, the song's recent Hot 100 rank (sparkline and "spots last week"), contracts traded, and closing time, with search, Rising / Falling / New entries filters, sorting and a watchlist (kept for the current page session). Opening a market shows its rank history and rules and an order panel where signed-in users buy or sell YES/NO contracts with Music Notes. The header shows the signed-in user's balance, and **My ledger** lists their buys, sells and payouts.
+The Discover page lists the bots' real open markets from `GET /markets` as cards: chance of YES, the song's recent Hot 100 rank (sparkline and "spots last week"), contracts traded, and closing time, with search, Rising / Falling / New entries filters, sorting and a watchlist (kept for the current page session). Opening a market shows its rank history and rules and an order panel where signed-in users submit YES/NO buy or sell limit orders, see their pending orders, and cancel them. The header shows the signed-in user's balance, and **My ledger** lists their buys, sells and payouts.
 
 **Testing signup and login:** Firebase handles account creation and sign-in, and the frontend then calls `/api/auth/me`, which the Go backend at `http://localhost:8080` answers after verifying the Firebase token. Run the backend in a separate terminal with `DATABASE_URL` set (see Backend above):
 
@@ -161,7 +162,7 @@ python -m pip install flake8 pytest
 With PostgreSQL running, migrations applied, and `DATABASE_URL` set, run:
 
 ```bash
-python -m ingestion.main
+python -m ingestion.run_ingestion
 ```
 
 This fetches the Hot 100, validates it, and saves songs and dated rankings to PostgreSQL. Repeating an unchanged snapshot does not create duplicate snapshot entries.
@@ -199,19 +200,37 @@ Commit source, tests, dependency manifests/lockfiles, and configuration. Do not 
 
 Project scaffolding, CI, the database schema, the Music Note ledger, and manual Hot 100 ingestion are implemented. Parser/storage test coverage and automatic weekly ingestion are still in progress. Genre charts are deferred.
 
-### Music Note ledger
+### Music Note ledger and limit orders
 
-- A user's first Firebase sign-in creates their ledger account with a 10,000 Music Note `grant` (`UserForFirebase` in `backend/db.go`). Later or concurrent sign-ins never grant twice.
-- Every balance change goes through `Post`, which updates `balances` and appends to `ledger_entries` in the caller's transaction, and rejects overdrafts.
-- Markets are Kalshi-style YES/NO questions created by the bots: "Will this song move at least `shift` spots from `baseline_rank` on the chart dated `chart_date`?" The bot sets `yes_price` (1–99); NO costs `100 - yes_price`.
-- `Buy` sells contracts from the house at that price until the market's `closes_at` (Monday before the chart date, midnight New York time). Users can sell contracts back at the current price (`Sell`) until `closes_at`, or hold them until `Resolve` reads the chart, pays 100 notes per winning contract, and closes every position in the market. A song missing from an ingested chart counts as rank 101.
-- The bots (`backend/bots.go`) run inside the server every 15 minutes. They resolve every open market whose chart is in `chart_snapshots`, then open next week's market for each song on the latest chart. `suggest` picks each song's shift from its latest direction and typical move size, and prices YES by how often the song has made that move before. Ingestion only needs to insert `chart_snapshots` rows (`song_id`, `chart_date`, `rank`), creating `songs` as needed. A chart counts as loaded only once all 100 ranks are in, so nothing settles on a partial chart.
-- The `user_pnl` view reports realized P&L, excluding grants; money in open positions is not counted as a loss until the market resolves.
-- `GET /auth/me` (signed in) returns `{"user_id", "uid", "email", "balance", "realized_pnl", "positions"}`, where each position is `{"market_id", "side", "quantity", "cost_basis"}`.
-- `GET /markets` (public) lists markets still open for trading: `id`, `title`, `artist`, `chart_date`, `baseline_rank`, `shift`, `yes_price`, `no_price`, `closes_at`, `volume` (contracts bought) and `history` (the song's last 10 Hot 100 ranks, oldest first).
-- `POST /markets/{id}/buy` with `{"side": "yes" | "no", "quantity": n}` returns `{"balance": ...}` for the signed-in user (`Authorization: Bearer <Firebase ID token>`), or 401 without a valid token.
-- `POST /markets/{id}/sell` takes the same body and sells held contracts back at the current price; selling more than you hold returns 409. The sold share of the cost basis leaves with them, so realized P&L moves by proceeds minus that cost.
-- `GET /me/ledger` (signed in) returns the user's ledger, newest first: each grant, buy, sell and payout with `amount`, `balance_after`, the contracts it moved (`side`, `quantity`, `price`; empty for grants and for trades made before migration 004) and its market (`title`, `artist`, `chart_date`, `shift`, `market_status`, `outcome`). The **My ledger** tab in the frontend shows it with All / Bought / Sold / Payouts filters and a Won / Lost / Open result per entry.
-- Add schema changes as new numbered files in `backend/migrations/`; never edit an applied migration.
+The first Firebase sign-in creates a ledger account with 10,000 Music Notes. `GET /auth/me` returns the account balance, realized P&L and open positions. `GET /me/ledger` returns grants, fills, payouts and refunds.
+
+A market asks whether a song will move UP or DOWN on its chart date. At rank 1 the choices are STAY and DOWN. The API stores UP/STAY as `yes` and DOWN as `no`. These are the only side mappings. The bot's prices are initial estimates; they are not guaranteed execution prices. The bot creates markets but does not currently place orders, so an order waits until another user supplies a match.
+
+`POST /markets/{id}/orders` accepts a signed-in user's order. For example:
+
+```json
+{"request_id":"a-unique-request-id","side":"yes","action":"buy","price":50,"quantity":10}
+```
+
+The ID must be unique per user. Retry the same request with the same ID to avoid placing it twice. Changing the details while reusing the ID returns 409. The app saves an unfinished request in the browser and shows a Retry button if the response is interrupted. Retry uses the original order and ID, including after a page reload. Successful and rejected requests are removed from the saved list. Saved requests belong to that browser and are not transferred to another device. Prices are whole Music Notes from 1 to 99. A buy price is the maximum the user will pay; a sell price is the minimum they will accept. The response includes `quantity` and `remaining`. A nonzero `remaining` means the rest is waiting to fill.
+
+The engine chooses the best eligible price, then the oldest order at that price. A buy can match a sell for the same side, or a buy on the opposite side when their prices add up to at least 100. Opposite-side sell orders can also match when their prices add up to at most 100. Users cannot match their own orders. The older order receives its limit price. Both fills, balance and position updates, and the trade record commit together.
+
+Open buy orders reserve their maximum cost, and sell orders reserve their remaining contracts. A user's displayed balance is their total balance; some of it may be reserved. `GET /me/orders` lists their open orders. `POST /orders/{id}/cancel` cancels their own open order and releases its reservation. Expired orders do not reserve funds, and settlement cancels remaining orders in that market.
+
+The backend uses a PostgreSQL transaction lock to serialize order placement, cancellation and settlement. It prevents competing trades from spending the same funds or contracts. It also limits concurrent throughput; the lock strategy should be revisited if actual load requires it. Contract ownership, ledger entries and trade records are stored in PostgreSQL.
+
+The bots run every 15 minutes to open markets and settle markets whose full Hot 100 chart has been ingested. A winning contract pays 100 notes. An absent song counts as rank 101. Migrations run automatically at backend startup. Add new numbered files to `backend/migrations/`; do not edit a migration that has already been applied.
+
+For ranks 2-100, an unchanged rank refunds each current holder's remaining position cost. Earlier sales remain final. At rank 1, an unchanged rank pays the STAY side 100 notes per contract. Actual refund ledger entries show Refunded; historical buys and sells do not claim to have received a refund.
+
+Migration 006 requires a database with no existing markets, because existing orders must retain their original rules. Keep the previous database and use a new development database:
+
+```bash
+createdb -h localhost -U jack octave_direction_dev
+export DATABASE_URL='postgres://jack@localhost:5432/octave_direction_dev?sslmode=disable'
+```
+
+Run the backend to apply migrations, import the chart with the ingestion instructions above, then restart the backend to generate markets immediately. Before switching databases, reconcile unfinished browser requests against the original backend and close other Octave tabs. Remove the localhost app's saved `octave-order-*` localStorage entries using browser developer tools; their market IDs belong to the previous database. Do not retry them against the new database.
 
 A previously reported frontend ESLint dependency vulnerability remains under review.

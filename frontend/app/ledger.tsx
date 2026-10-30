@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import type { User } from "firebase/auth";
-import { entryLabels, entryResult, marketQuestion, type Account, type LedgerEntry } from "./trading";
+import { entryLabels, entryResult, marketQuestion, sideLabel, type Account, type LedgerEntry } from "./trading";
 
-const FILTERS = [["All", null], ["Bought", "buy"], ["Sold", "sell"], ["Payouts", "payout"]] as const;
+const FILTERS = [["All", null], ["Bought", "buy"], ["Sold", "sell"], ["Payouts", "payout"], ["Refunds", "refund"]] as const;
 
 type Loaded = { entries: LedgerEntry[]; account: Account | null } | { error: string };
 
@@ -21,7 +21,7 @@ async function load(user: User): Promise<Loaded> {
 function question(e: LedgerEntry): string {
     if (e.title === null || e.shift === null || e.baseline_rank === null || e.chart_date === null)
         return "";
-    return marketQuestion({ title: e.title, chart_date: e.chart_date, baseline_rank: e.baseline_rank, shift: e.shift });
+    return marketQuestion({ title: e.title, chart_date: e.chart_date, baseline_rank: e.baseline_rank });
 }
 
 // The signed-in user's Music Note ledger: every buy, sell and payout with the
@@ -61,7 +61,7 @@ export function LedgerView({ user, onSignUp }: { user: User | null; onSignUp: ()
                 <td>{new Date(e.created_at).toLocaleString()}</td>
                 <td>{entryLabels[e.kind]}</td>
                 <td className="ledger-song">{e.title ? <><strong>{e.title}</strong><span>{e.artist}</span><small>{question(e)}</small></> : "—"}</td>
-                <td>{e.side ? <span className={e.side === "yes" ? "up ledger-side" : "down ledger-side"}>{e.side.toUpperCase()}</span> : "—"}</td>
+                <td>{e.side ? <span className={e.side === "yes" ? "up ledger-side" : "down ledger-side"}>{sideLabel(e.baseline_rank ?? 0, e.side)}</span> : "—"}</td>
                 <td className="num">{e.quantity?.toLocaleString() ?? "—"}</td>
                 <td className="num">{e.price !== null ? `♫ ${e.price}` : "—"}</td>
                 <td className={`num ${e.amount >= 0 ? "positive" : "negative"}`}>{e.amount >= 0 ? "+" : "−"}♫ {Math.abs(e.amount).toLocaleString()}</td>

@@ -1842,3 +1842,55 @@ html {
     display:none
   }
 }
+
+.header nav button {
+  color:#60645a;
+}
+footer {
+  display:grid;
+  grid-template-columns:1fr auto 1fr;
+}
+.footer-right {
+  margin-left:0;
+  justify-self:end;
+}
+.art-caption {
+  left:50%;
+  transform:translateX(-50%);
+  white-space:nowrap;
+}
+@media(max-width:850px) {
+  .header {
+    height:auto;
+    min-height:78px;
+    flex-wrap:wrap;
+    gap:0 20px;
+    padding-top:12px;
+  }
+  .header nav {
+    order:3;
+    width:100%;
+    height:42px;
+    overflow-x:auto;
+  }
+  .header nav button {
+    flex-shrink:0;
+  }
+  .header nav button:nth-child(2),
+  .header nav button:nth-child(3) {
+    display:block;
+  }
+}
+@media(max-width:580px) {
+  footer {
+    grid-template-columns:1fr auto;
+  }
+  .footer-tagline {
+    grid-column:1 / -1;
+    grid-row:2;
+    text-align:center;
+  }
+  .footer-right {
+    width:auto;
+  }
+}

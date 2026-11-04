@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"slices"
 	"time"
 )
 
@@ -18,40 +17,36 @@ const closeDaysBefore = 5
 
 const botInterval = 15 * time.Minute
 
-// suggest is the market-making bot. Given a song's ranks oldest to newest (the
-// last is its current rank), it proposes the move players are most likely to
-// bet on: the song's latest direction at its typical weekly move size. The YES
-// price is how often the song has made that move before, Laplace-smoothed so
-// a song with no history starts at 50.
-// ponytail: trend-following heuristic; swap in a fitted model once there is enough chart history.
 func suggest(ranks []int) (shift, yesPrice int) {
 	current := ranks[len(ranks)-1]
-	var moves, sizes []int
+	wins := 0
+	decisions := 0
 	for i := 1; i < len(ranks); i++ {
-		m := ranks[i-1] - ranks[i] // positive = rose
-		moves = append(moves, m)
-		sizes = append(sizes, max(m, -m))
-	}
-
-	shift = 1
-	if len(sizes) > 0 {
-		slices.Sort(sizes)
-		shift = max(sizes[(len(sizes)-1)/2], 1) // median
-	}
-	if len(moves) > 0 && moves[len(moves)-1] > 0 && current > 1 {
-		shift = min(shift, current-1) // can't rise above #1
-	} else {
-		shift = -min(shift, ChartSize+1-current) // dropping off the chart counts as #101
-	}
-
-	hits := 0
-	for _, m := range moves {
-		if (shift > 0 && m >= shift) || (shift < 0 && m <= shift) {
-			hits++
+		previous := ranks[i-1]
+		next := ranks[i]
+		if current == 1 {
+			if previous != 1 {
+				continue
+			}
+			decisions++
+			if next == 1 {
+				wins++
+			}
+		} else if next != previous {
+			decisions++
+			if next < previous {
+				wins++
+			}
 		}
 	}
-	yesPrice = 100 * (hits + 1) / (len(moves) + 2)
-	return shift, min(max(yesPrice, 1), 99)
+	price := 100 * (wins + 1) / (decisions + 2)
+	if price < 1 {
+		price = 1
+	}
+	if price > 99 {
+		price = 99
+	}
+	return 1, price
 }
 
 // CreateMarkets has the bot open one market per song on the chart dated

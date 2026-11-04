@@ -39,7 +39,7 @@ func TestHealth(t *testing.T) {
 // Without a valid sign-in, nobody can buy.
 func TestBuyRequiresLogin(t *testing.T) {
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/markets/1/buy", strings.NewReader(`{"side":"yes","quantity":1}`))
+	request := httptest.NewRequest(http.MethodPost, "/markets/1/orders", strings.NewReader(`{"side":"yes","quantity":1}`))
 
 	routes(nil).ServeHTTP(response, request)
 
@@ -70,7 +70,7 @@ func TestNoDatabaseIs503(t *testing.T) {
 
 	for _, request := range []*http.Request{
 		httptest.NewRequest(http.MethodGet, "/auth/me", nil),
-		httptest.NewRequest(http.MethodPost, "/markets/1/buy", strings.NewReader(`{"side":"yes","quantity":1}`)),
+		httptest.NewRequest(http.MethodPost, "/markets/1/orders", strings.NewReader(`{"side":"yes","quantity":1}`)),
 	} {
 		response := httptest.NewRecorder()
 		routes(nil).ServeHTTP(response, request)

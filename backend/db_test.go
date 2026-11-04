@@ -1093,7 +1093,7 @@ func TestT11MarketGenres(t *testing.T) {
 		if m.ID == marketID {
 			if len(m.Genres) != 1 || m.Genres[0] != "rock-songs" || len(m.History) != 0 {
 				t.Fatalf("genres %v, history %d points; want [rock-songs] and no Hot 100 history", m.Genres, len(m.History))
-			}Tes
+			}
 			return
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"strconv"
 
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/auth"
@@ -277,9 +278,9 @@ func routes(db *sql.DB) http.Handler {
 		writeJSON(w, entries)
 	})
 
-	// Body: {"side": "yes" | "no", "quantity": n}. Returns {"balance": n}.
-	mux.HandleFunc("POST /markets/{id}/buy", trade(db, "buy", Buy))
-	mux.HandleFunc("POST /markets/{id}/sell", trade(db, "sell", Sell))
+	// Body: {"side": "yes" | "no", "quantity": n}. Returns {"balance": n}. Written out beacuse it caused an errors
+	// mux.HandleFunc("POST /markets/{id}/buy", trade(db, "buy", Buy))
+	// mux.HandleFunc("POST /markets/{id}/sell", trade(db, "sell", Sell))
 	// Credits the weekly grant to the signed-in user. Returns {"balance": n}.
 	mux.HandleFunc("POST /me/weekly-grant", func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := signedIn(w, r)

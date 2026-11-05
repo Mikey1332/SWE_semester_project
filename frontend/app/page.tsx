@@ -4,8 +4,20 @@ import Image from "next/image";
 import type { User } from "firebase/auth";
 import { AuthDialog, useOctaveUser } from "./auth-dialog";
 import { LedgerView } from "./ledger";
-import { MARKET_FILTERS, MARKET_SORTS, artworkColor, held, lastMove, marketQuestion, matchesFilter, monogram, parseQuantity, rankPath, sidePrice, sortMarkets, type Account, type LiveMarket, type MarketFilter, type MarketSort, type TradeAction, type TradeSide } from "./trading";
+import { auth } from "./firebase";
+import { readUnfinishedOrders, removeUnfinishedOrder, saveUnfinishedOrder, type UnfinishedOrder } from "./order-retry";
+import { MARKET_FILTERS, MARKET_SORTS, artworkColor, held, lastMove, marketQuestion, matchesFilter, monogram, parseQuantity, rankPath, sidePrice, sideLabel, sortMarkets, type Account, type LiveMarket, type MarketFilter, type MarketSort, type TradeAction, type TradeSide } from "./trading";
 import {Tutorial} from "./tutorial-dialog";
+type PendingOrder = {
+    id: number;
+    market_id: number;
+    side: TradeSide;
+    action: TradeAction;
+    price: number;
+    quantity: number;
+    remaining: number;
+    cancelled: boolean;
+};
 function Icon({ name, size = 20 }: {
     name: "search" | "arrow" | "music" | "chart" | "clock" | "star";
     size?: number;

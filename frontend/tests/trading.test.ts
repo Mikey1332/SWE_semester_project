@@ -17,8 +17,11 @@ test("genre filter shows only songs on that genre's chart", () => {
 
 
 test("market question reads the bot's shift", () => {
-    expect(marketQuestion(market)).toBe("Will Golden rise 5+ spots from #12 on the 2026-10-31 chart?");
-    expect(marketQuestion({ ...market, shift: -1 })).toBe("Will Golden fall 1+ spot from #12 on the 2026-10-31 chart?");
+    expect(marketQuestion(market)).toBe("Will Golden go up or down from #12 on October 31, 2026?");
+    expect(marketQuestion({ ...market, baseline_rank: 1 })).toBe("Will Golden stay at #1 or go down on October 31, 2026?");
+    expect(sideLabel(1, "yes")).toBe("STAY");
+    expect(sideLabel(3, "yes")).toBe("UP");
+    expect(sideLabel(3, "no")).toBe("DOWN");
 });
 
 test("price and holdings per side", () => {

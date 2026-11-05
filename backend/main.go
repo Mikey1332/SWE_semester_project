@@ -279,8 +279,16 @@ func routes(db *sql.DB) http.Handler {
 	})
 
 	// Body: {"side": "yes" | "no", "quantity": n}. Returns {"balance": n}. Written out beacuse it caused an errors
-	// mux.HandleFunc("POST /markets/{id}/buy", trade(db, "buy", Buy))
-	// mux.HandleFunc("POST /markets/{id}/sell", trade(db, "sell", Sell))
+	mux.HandleFunc("POST /markets/{id}/orders", func(w http.ResponseWriter, r *http.Request) {
+		orderHandler(w, r, db)
+	})
+	mux.HandleFunc("GET /me/orders", func(w http.ResponseWriter, r *http.Request) {
+		listOrders(w, r, db)
+	})
+	mux.HandleFunc("POST /orders/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		cancelOrder(w, r, db)
+	})
+
 	// Credits the weekly grant to the signed-in user. Returns {"balance": n}.
 	mux.HandleFunc("POST /me/weekly-grant", func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := signedIn(w, r)

@@ -827,10 +827,10 @@ func TestT4PortfolioGainAndLoss(t *testing.T) {
 	marketID, songID, chartDate := newMarket(t, db, 50, 5, 50) // YES and NO both cost 50
 	winner, loser := newUser(t, db), newUser(t, db)
 
-	if _, err := Buy(ctx, db, winner, marketID, "yes", 2); err != nil { // spends 100
+	if _, err := buyForTest(t, ctx, db, winner, marketID, "yes", 2); err != nil { // spends 100
 		t.Fatal(err)
 	}
-	if _, err := Buy(ctx, db, loser, marketID, "no", 2); err != nil { // spends 100
+	if _, err := buyForTest(t, ctx, db, loser, marketID, "no", 2); err != nil { // spends 100
 		t.Fatal(err)
 	}
 	addRank(t, db, songID, chartDate, 40) // rose 10 spots: YES wins
@@ -849,10 +849,10 @@ func TestT10SellFiveContracts(t *testing.T) {
 	marketID, _, _ := newMarket(t, db, 50, 5, 50)
 	id := newUser(t, db)
 
-	if _, err := Buy(ctx, db, id, marketID, "yes", 10); err != nil { // -500
+	if _, err := buyForTest(t, ctx, db, id, marketID, "yes", 10); err != nil { // -500
 		t.Fatal(err)
 	}
-	balance, err := Sell(ctx, db, id, marketID, "yes", 5) // +250
+	balance, err := sellForTest(t, ctx, db, id, marketID, "yes", 5) // +250
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -910,11 +910,11 @@ func TestT17FailedSettlementDoesNotStopOthers(t *testing.T) {
 	fillChart(t, db, badDate)
 
 	winner := newUser(t, db)
-	if _, err := Buy(ctx, db, winner, good, "yes", 2); err != nil { // -100
+	if _, err := buyForTest(t, ctx, db, winner, good, "yes", 2); err != nil { // -100
 		t.Fatal(err)
 	}
 	broken := newUser(t, db)
-	if _, err := Buy(ctx, db, broken, bad, "yes", 1); err != nil { // -50
+	if _, err := buyForTest(t, ctx, db, broken, bad, "yes", 1); err != nil { // -50
 		t.Fatal(err)
 	}
 	// Break the bad market: its winner has no balance row, so the payout fails.
@@ -956,11 +956,11 @@ func TestT18ManyUsersTradeAtOnce(t *testing.T) {
 	for i, id := range ids {
 		side := []string{"yes", "no"}[i%2]
 		wg.Go(func() {
-			if _, err := Buy(ctx, db, id, marketID, side, 3); err != nil {
+			if _, err := buyForTest(t, ctx, db, id, marketID, side, 3); err != nil {
 				t.Error(err)
 				return
 			}
-			if _, err := Sell(ctx, db, id, marketID, side, 1); err != nil {
+			if _, err := sellForTest(t, ctx, db, id, marketID, side, 1); err != nil {
 				t.Error(err)
 			}
 		})

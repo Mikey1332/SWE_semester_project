@@ -7,3 +7,4 @@ node_modules/
 # Local environment and OS files
 .env
 .DS_Store
+*.exe

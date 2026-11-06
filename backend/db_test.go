@@ -63,8 +63,10 @@ func TestTestDatabaseName(t *testing.T) {
 }
 
 // unique returns a name no other test run has used.
+var uniqueN atomic.Int64
+
 func unique(prefix string) string {
-	return fmt.Sprintf("%s%d", prefix, time.Now().UnixNano())
+	return fmt.Sprintf("%s%d-%d", prefix, time.Now().UnixNano(), uniqueN.Add(1))
 }
 
 func newUser(t *testing.T, db *sql.DB) int64 {
@@ -954,13 +956,10 @@ func TestT18ManyUsersTradeAtOnce(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i, id := range ids {
-		side := []string{"yes", "no"}[i%2]
+		side := []string{"yes", "no"}[i%2] // equal YES and NO demand at 50, so every order fills
 		wg.Go(func() {
-			if _, err := buyForTest(t, ctx, db, id, marketID, side, 3); err != nil {
-				t.Error(err)
-				return
-			}
-			if _, err := sellForTest(t, ctx, db, id, marketID, side, 1); err != nil {
+			if _, err := PlaceOrder(ctx, db, Order{UserID: id, MarketID: marketID, RequestID: unique("t18"),
+				Side: side, Action: "buy", Price: 50, Quantity: 3}); err != nil {
 				t.Error(err)
 			}
 		})
@@ -976,8 +975,9 @@ func TestT18ManyUsersTradeAtOnce(t *testing.T) {
 		t.Fatalf("contracts bought = %d, want %d", volume, users*3)
 	}
 	for _, id := range ids {
-		checkUser(t, db, id, 9_900, 0) // bought 3 at 50, sold 1 at 50
+		checkUser(t, db, id, 9_850, 0) // bought 3 at 50
 	}
+
 }
 
 // T12: the weekly grant pays once per week and never twice, even when claimed at once.

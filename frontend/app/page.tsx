@@ -7,6 +7,7 @@ import { LedgerView } from "./ledger";
 import { auth } from "./firebase";
 import { readUnfinishedOrders, removeUnfinishedOrder, saveUnfinishedOrder, type UnfinishedOrder } from "./order-retry";
 import { MARKET_FILTERS, MARKET_SORTS, artworkColor, held, lastMove, marketQuestion, matchesFilter, monogram, parseQuantity, rankPath, sidePrice, sideLabel, sortMarkets, type Account, type LiveMarket, type MarketFilter, type MarketSort, type TradeAction, type TradeSide } from "./trading";
+import {Tutorial} from "./tutorial-dialog";
 type PendingOrder = {
     id: number;
     market_id: number;
@@ -17,7 +18,6 @@ type PendingOrder = {
     remaining: number;
     cancelled: boolean;
 };
-
 function Icon({ name, size = 20 }: {
     name: "search" | "arrow" | "music" | "chart" | "clock" | "star";
     size?: number;
@@ -465,5 +465,6 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
       </>}
     </main><footer><button className="brand footer-brand" onClick={goHome}><Image src="/octave-black.png" alt="Octave" width={2170} height={725} className="brand-logo" /></button><span className="footer-tagline">Made for music minds.</span><span className="footer-right">© 2026 Octave</span></footer>
     {authMode && <AuthDialog mode={authMode} onClose={() => setAuthMode(null)}/>}
+        {user && <Tutorial key={user.uid}/>}
   </div>;
 }

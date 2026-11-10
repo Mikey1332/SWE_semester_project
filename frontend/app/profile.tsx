@@ -71,13 +71,12 @@ export function ProfileView({
         let current = true;
 
         async function loadProfile() {
-            setLoading(true);
-            setError("");
             try {
                 const result = await fetchProfileData(currentUser);
                 if (current) {
                     setProfile(result.profileData);
                     setRawOrders(result.ordersList);
+                    setError("");
                     setLoading(false);
                 }
             } catch (err) {

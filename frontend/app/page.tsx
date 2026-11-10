@@ -7,7 +7,7 @@ import { LedgerView } from "./ledger";
 import { GroupsView } from "./groups";
 import { auth } from "./firebase";
 import { readUnfinishedOrders, removeUnfinishedOrder, saveUnfinishedOrder, type UnfinishedOrder } from "./order-retry";
-import { MARKET_FILTERS, MARKET_SORTS, artworkColor, held, lastMove, marketQuestion, matchesFilter, monogram, parseQuantity, rankPath, sidePrice, sideLabel, sortMarkets, type Account, type LiveMarket, type MarketFilter, type MarketSort, type TradeAction, type TradeSide } from "./trading";
+import { MARKET_FILTERS, MARKET_SORTS, artworkColor, held, lastMove, marketQuestion, matchesFilter, parseQuantity, rankPath, sidePrice, sideLabel, sortMarkets, type Account, type LiveMarket, type MarketFilter, type MarketSort, type TradeAction, type TradeSide } from "./trading";
 import {Tutorial} from "./tutorial-dialog";
 import { ProfileView } from "./profile";
 type PendingOrder = {
@@ -32,7 +32,6 @@ function Artwork({ market }: { market: LiveMarket }) {
 
     useEffect(() => {
         let current = true;
-        setCoverUrl("");
 
         async function loadCover() {
             try {
@@ -40,6 +39,9 @@ function Artwork({ market }: { market: LiveMarket }) {
                 const url = "https://itunes.apple.com/search?term=" + query + "&entity=song&limit=1";
                 const response = await fetch(url);
                 if (!response.ok) {
+                    if (current) {
+                        setCoverUrl("");
+                    }
                     return;
                 }
                 const data = await response.json();
@@ -48,6 +50,8 @@ function Artwork({ market }: { market: LiveMarket }) {
                     if (current) {
                         setCoverUrl(highRes);
                     }
+                } else if (current) {
+                    setCoverUrl("");
                 }
             } catch {
                 if (current) {
@@ -65,7 +69,7 @@ function Artwork({ market }: { market: LiveMarket }) {
 
     return (
         <div className={`artwork ${artworkColor(market.id)}`} aria-label={`${market.artist} album artwork`}>
-            {coverUrl !== "" && <img src={coverUrl} alt={market.title} className="art-cover" />}
+            {coverUrl !== "" && <Image src={coverUrl} alt={market.title} width={300} height={300} unoptimized className="art-cover" />}
         </div>
     );
 }
@@ -97,10 +101,6 @@ function SongPreview({ market }: { market: LiveMarket }) {
 
     useEffect(() => {
         let current = true;
-        setSongInfo(null);
-        setPlaying(false);
-        setCurrentTime(0);
-        setDuration(30);
 
         async function fetchSongInfo() {
             try {
@@ -108,6 +108,9 @@ function SongPreview({ market }: { market: LiveMarket }) {
                 const url = "https://itunes.apple.com/search?term=" + query + "&entity=song&limit=1";
                 const response = await fetch(url);
                 if (!response.ok) {
+                    if (current) {
+                        setSongInfo(null);
+                    }
                     return;
                 }
                 const data = await response.json();
@@ -123,6 +126,9 @@ function SongPreview({ market }: { market: LiveMarket }) {
                         });
                     }
                     if (current) {
+                        setPlaying(false);
+                        setCurrentTime(0);
+                        setDuration(30);
                         setSongInfo({
                             albumName: track.collectionName || "",
                             genre: track.primaryGenreName || "",
@@ -131,6 +137,8 @@ function SongPreview({ market }: { market: LiveMarket }) {
                             appleMusicUrl: track.trackViewUrl || "",
                         });
                     }
+                } else if (current) {
+                    setSongInfo(null);
                 }
             } catch {
                 if (current) {
@@ -555,7 +563,7 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
           <p>{selected.artist} <span className="dot-separator">·</span> Closes {closesLong(selected)}</p>
         </div>
       </div>
-      <div className="detail-layout"><section className="chart-panel"><div className="chart-top"><div><span className="muted">{sideLabel(selected.baseline_rank, "yes")} estimate</span><strong>{selected.yes_price}% <small><Move market={selected}/></small></strong></div><span className="sample-badge">Hot 100 rank</span></div><div className="probability-chart"><div className="chart-grid"><span>#1</span><span>#25</span><span>#50</span><span>#75</span><span>#100</span></div><svg viewBox="0 0 700 240" preserveAspectRatio="none" role="img" aria-label={`${selected.title}'s Hot 100 rank over the last ${Math.max(selected.history.length, 1)} weeks, now #${selected.baseline_rank}`}><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop stopColor="#8e7bbc" stopOpacity=".24"/><stop offset="1" stopColor="#8e7bbc" stopOpacity="0"/></linearGradient></defs>{(() => { const line = rankPath(selected.history.length ? selected.history.map(h => h.rank) : [selected.baseline_rank], 700, 240, 0); return <><path d={`${line} V240 H0Z`} fill="url(#chartFill)"/><path d={line} stroke="#8c72b4" strokeWidth="3" fill="none" vectorEffect="non-scaling-stroke"/></>; })()}</svg></div><div className="chart-dates">{(selected.history.length ? selected.history : [{ chart_date: selected.chart_date, rank: selected.baseline_rank }]).map(h => <span key={h.chart_date}>{shortDate(h.chart_date)}</span>)}</div><div className="chart-bottom"><span>♫ {selected.volume.toLocaleString()} contracts traded</span><span>Settles on the {shortDate(selected.chart_date)} chart</span></div><SongPreview market={selected}/><div className="market-rules"><p>Winning contracts pay ♫ 100. Trading closes {closesLong(selected)}.</p></div></section>
+      <div className="detail-layout"><section className="chart-panel"><div className="chart-top"><div><span className="muted">{sideLabel(selected.baseline_rank, "yes")} estimate</span><strong>{selected.yes_price}% <small><Move market={selected}/></small></strong></div><span className="sample-badge">Hot 100 rank</span></div><div className="probability-chart"><div className="chart-grid"><span>#1</span><span>#25</span><span>#50</span><span>#75</span><span>#100</span></div><svg viewBox="0 0 700 240" preserveAspectRatio="none" role="img" aria-label={`${selected.title}'s Hot 100 rank over the last ${Math.max(selected.history.length, 1)} weeks, now #${selected.baseline_rank}`}><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop stopColor="#8e7bbc" stopOpacity=".24"/><stop offset="1" stopColor="#8e7bbc" stopOpacity="0"/></linearGradient></defs>{(() => { const line = rankPath(selected.history.length ? selected.history.map(h => h.rank) : [selected.baseline_rank], 700, 240, 0); return <><path d={`${line} V240 H0Z`} fill="url(#chartFill)"/><path d={line} stroke="#8c72b4" strokeWidth="3" fill="none" vectorEffect="non-scaling-stroke"/></>; })()}</svg></div><div className="chart-dates">{(selected.history.length ? selected.history : [{ chart_date: selected.chart_date, rank: selected.baseline_rank }]).map(h => <span key={h.chart_date}>{shortDate(h.chart_date)}</span>)}</div><div className="chart-bottom"><span>♫ {selected.volume.toLocaleString()} contracts traded</span><span>Settles on the {shortDate(selected.chart_date)} chart</span></div><SongPreview key={selected.id} market={selected}/><div className="market-rules"><p>Winning contracts pay ♫ 100. Trading closes {closesLong(selected)}.</p></div></section>
       <aside className="order-panel">
         <div className="chart-source">
           <Image src="/billboard-logo.svg" alt="Billboard Hot 100" width={150} height={32} className="billboard-logo"/>

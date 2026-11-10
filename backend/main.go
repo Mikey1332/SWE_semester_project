@@ -559,6 +559,51 @@ func routes(db *sql.DB) http.Handler {
 		}
 	})
 
+	mux.HandleFunc("POST /groups/{id}/owner", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+
+		groupID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || groupID <= 0 {
+			http.Error(w, "invalid group id", http.StatusBadRequest)
+			return
+		}
+
+		var body struct {
+			UserID int64 `json:"user_id"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.UserID <= 0 {
+			http.Error(w, "valid new owner user id required", http.StatusBadRequest)
+			return
+		}
+
+		err = TransferGroupOwnership(r.Context(), db, userID, groupID, body.UserID)
+
+		switch {
+		case errors.Is(err, ErrNoSuchGroup):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, ErrNotGroupOwner):
+			http.Error(w, err.Error(), http.StatusForbidden)
+		case errors.Is(err, ErrAlreadyGroupOwner):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case errors.Is(err, ErrNotGroupMember):
+			http.Error(w, "new owner must already be a group member", http.StatusBadRequest)
+		case err != nil:
+			log.Printf("transfer group %d ownership by user %d: %v", groupID, userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
 	return mux
 }
 

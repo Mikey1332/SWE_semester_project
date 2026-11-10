@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -768,5 +769,184 @@ func TestPrivateGroupLeaderboardAPI(t *testing.T) {
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
+// US9: the owner can transfer ownership to a member and then leave.
+func TestTransferGroupOwnership(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	ownerID := newUser(t, db)
+	memberID := newUser(t, db)
+
+	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("transfer"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = JoinGroup(ctx, db, memberID, groupID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = TransferGroupOwnership(ctx, db, ownerID, groupID, memberID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var savedOwnerID int64
+	err = db.QueryRowContext(ctx,
+		"SELECT owner_id FROM user_groups WHERE id = $1",
+		groupID,
+	).Scan(&savedOwnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if savedOwnerID != memberID {
+		t.Fatal("ownership should belong to the new owner")
+	}
+
+	// The previous owner can now leave.
+	err = LeaveGroup(ctx, db, ownerID, groupID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The new owner cannot leave without transferring ownership.
+	err = LeaveGroup(ctx, db, memberID, groupID)
+	if !errors.Is(err, ErrGroupOwnerCannotLeave) {
+		t.Fatalf("expected ErrGroupOwnerCannotLeave, got %v", err)
+	}
+}
+
+// US9: only the owner can transfer ownership, and the recipient must be a member.
+func TestInvalidOwnershipTransfers(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	ownerID := newUser(t, db)
+	memberID := newUser(t, db)
+	outsiderID := newUser(t, db)
+
+	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("transfer-errors"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = JoinGroup(ctx, db, memberID, groupID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A regular member cannot transfer ownership.
+	err = TransferGroupOwnership(ctx, db, memberID, groupID, memberID)
+	if !errors.Is(err, ErrNotGroupOwner) {
+		t.Fatalf("expected ErrNotGroupOwner, got %v", err)
+	}
+
+	// The owner cannot transfer ownership to an outsider.
+	err = TransferGroupOwnership(ctx, db, ownerID, groupID, outsiderID)
+	if !errors.Is(err, ErrNotGroupMember) {
+		t.Fatalf("expected ErrNotGroupMember, got %v", err)
+	}
+
+	// The owner cannot transfer ownership to themselves.
+	err = TransferGroupOwnership(ctx, db, ownerID, groupID, ownerID)
+	if !errors.Is(err, ErrAlreadyGroupOwner) {
+		t.Fatalf("expected ErrAlreadyGroupOwner, got %v", err)
+	}
+
+	// Rejected transfers must not change the owner.
+	var savedOwnerID int64
+	err = db.QueryRowContext(ctx,
+		"SELECT owner_id FROM user_groups WHERE id = $1",
+		groupID,
+	).Scan(&savedOwnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if savedOwnerID != ownerID {
+		t.Fatal("rejected transfers should not change ownership")
+	}
+}
+
+func TestTransferGroupOwnershipAPI(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	ownerID := newUser(t, db)
+	memberID := newUser(t, db)
+
+	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("transfer-api"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = JoinGroup(ctx, db, memberID, groupID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalCurrentUser := currentUser
+	t.Cleanup(func() {
+		currentUser = originalCurrentUser
+	})
+
+	path := fmt.Sprintf("/groups/%d/owner", groupID)
+	body := fmt.Sprintf(`{"user_id":%d}`, memberID)
+	handler := routes(db)
+
+	// A regular member cannot make themselves the owner.
+	currentUser = func(r *http.Request) (int64, error) {
+		return memberID, nil
+	}
+
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", response.Code)
+	}
+
+	var savedOwnerID int64
+	err = db.QueryRowContext(ctx,
+		"SELECT owner_id FROM user_groups WHERE id = $1",
+		groupID,
+	).Scan(&savedOwnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if savedOwnerID != ownerID {
+		t.Fatal("rejected request should not change ownership")
+	}
+
+	// The current owner can transfer ownership.
+	currentUser = func(r *http.Request) (int64, error) {
+		return ownerID, nil
+	}
+
+	request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", response.Code, response.Body.String())
+	}
+
+	err = db.QueryRowContext(ctx,
+		"SELECT owner_id FROM user_groups WHERE id = $1",
+		groupID,
+	).Scan(&savedOwnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if savedOwnerID != memberID {
+		t.Fatal("successful request should change ownership")
 	}
 }

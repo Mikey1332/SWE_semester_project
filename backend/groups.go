@@ -19,6 +19,7 @@ var (
 	ErrNotGroupOwner         = errors.New("group owner permissions required")
 	ErrCannotRemoveOwner     = errors.New("the group owner cannot be removed")
 	ErrPrivateGroupAccess    = errors.New("group membership required")
+	ErrAlreadyGroupOwner     = errors.New("this user already owns the group")
 )
 
 type Group struct {
@@ -333,4 +334,55 @@ func GetGroupMembers(ctx context.Context, db *sql.DB, userID, groupID int64) ([]
 	}
 
 	return members, nil
+}
+
+func TransferGroupOwnership(ctx context.Context, db *sql.DB, userID, groupID, newOwnerID int64) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Lock the group while changing ownership.
+	var ownerID sql.NullInt64
+
+	query := "SELECT owner_id FROM user_groups WHERE id = $1 FOR UPDATE"
+	err = tx.QueryRowContext(ctx, query, groupID).Scan(&ownerID)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNoSuchGroup
+	}
+	if err != nil {
+		return err
+	}
+
+	// Only the current owner can transfer ownership.
+	if !ownerID.Valid || ownerID.Int64 != userID {
+		return ErrNotGroupOwner
+	}
+
+	if newOwnerID == userID {
+		return ErrAlreadyGroupOwner
+	}
+
+	// The new owner must already belong to the group.
+	var isMember bool
+
+	query = "SELECT EXISTS (SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2)"
+	err = tx.QueryRowContext(ctx, query, groupID, newOwnerID).Scan(&isMember)
+	if err != nil {
+		return err
+	}
+
+	if !isMember {
+		return ErrNotGroupMember
+	}
+
+	query = "UPDATE user_groups SET owner_id = $1 WHERE id = $2"
+	_, err = tx.ExecContext(ctx, query, newOwnerID, groupID)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }

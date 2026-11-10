@@ -23,9 +23,11 @@ var (
 )
 
 type Group struct {
-	ID      int64  `json:"id"`
-	Name    string `json:"name"`
-	Members int    `json:"members"`
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Members   int    `json:"members"`
+	IsPrivate bool   `json:"is_private"`
+	IsOwner   bool   `json:"is_owner"` //this is a quick way to identify if user is owner so we don't iterate through member list every time.
 }
 
 type GroupMember struct {
@@ -37,10 +39,14 @@ type GroupMember struct {
 // MyGroups lists the groups the user belongs to, with each group's member count.
 func MyGroups(ctx context.Context, db *sql.DB, userID int64) ([]Group, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT g.id, g.name, (SELECT count(*) FROM group_members c WHERE c.group_id = g.id)
-		FROM user_groups g JOIN group_members m ON m.group_id = g.id
-		WHERE m.user_id = $1
-		ORDER BY g.name`, userID)
+        SELECT g.id, g.name,
+               (SELECT COUNT(*) FROM group_members c WHERE c.group_id = g.id),
+               g.is_private,
+               COALESCE(g.owner_id = $1, false)
+        FROM user_groups g
+        JOIN group_members m ON m.group_id = g.id
+        WHERE m.user_id = $1
+        ORDER BY g.name`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +54,7 @@ func MyGroups(ctx context.Context, db *sql.DB, userID int64) ([]Group, error) {
 	groups := []Group{}
 	for rows.Next() {
 		var g Group
-		if err := rows.Scan(&g.ID, &g.Name, &g.Members); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.Members, &g.IsPrivate, &g.IsOwner); err != nil {
 			return nil, err
 		}
 		groups = append(groups, g)
@@ -432,4 +438,33 @@ func DeleteGroup(ctx context.Context, db *sql.DB, userID, groupID int64) error {
 	}
 
 	return tx.Commit()
+}
+
+func GetPublicGroups(ctx context.Context, db *sql.DB, search string) ([]Group, error) {
+	query := "SELECT g.id, g.name, (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id) FROM user_groups g WHERE g.is_private = false AND strpos(lower(g.name), lower($1)) > 0 ORDER BY g.name, g.id LIMIT 100"
+
+	rows, err := db.QueryContext(ctx, query, search)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	groups := []Group{}
+
+	for rows.Next() {
+		var group Group
+
+		err = rows.Scan(&group.ID, &group.Name, &group.Members)
+		if err != nil {
+			return nil, err
+		}
+
+		groups = append(groups, group)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return groups, nil
 }

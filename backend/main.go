@@ -636,6 +636,28 @@ func routes(db *sql.DB) http.Handler {
 		}
 	})
 
+	mux.HandleFunc("GET /groups", func(w http.ResponseWriter, r *http.Request) {
+		_, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+
+		search := strings.TrimSpace(r.URL.Query().Get("search"))
+		groups, err := GetPublicGroups(r.Context(), db, search)
+		if err != nil {
+			log.Printf("public groups: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, groups)
+	})
+
 	return mux
 }
 

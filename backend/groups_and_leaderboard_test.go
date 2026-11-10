@@ -1135,3 +1135,104 @@ func TestDeleteGroupAPI(t *testing.T) {
 		t.Fatal("owner's request should delete the group")
 	}
 }
+
+// US9: public-group search ignores capitalization and excludes private groups.
+func TestSearchPublicGroups(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	ownerID := newUser(t, db)
+	search := unique("search")
+
+	publicID, _, err := CreateGroup(ctx, db, ownerID, search+" Music Fans", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = CreateGroup(ctx, db, ownerID, search+" Private Fans", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = CreateGroup(ctx, db, ownerID, unique("unrelated"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	groups, err := GetPublicGroups(ctx, db, strings.ToUpper(search))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 matching public group, got %d", len(groups))
+	}
+
+	if groups[0].ID != publicID {
+		t.Fatal("search returned the wrong group")
+	}
+
+	if groups[0].Members != 1 {
+		t.Fatal("the owner should count as one member")
+	}
+}
+
+func TestPublicGroupsAPI(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	ownerID := newUser(t, db)
+	search := unique("browse")
+
+	publicID, _, err := CreateGroup(ctx, db, ownerID, search+" Public", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = CreateGroup(ctx, db, ownerID, search+" Private", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalCurrentUser := currentUser
+	t.Cleanup(func() {
+		currentUser = originalCurrentUser
+	})
+
+	path := "/groups?search=" + search
+	handler := routes(db)
+
+	// Signed-out requests must be rejected.
+	currentUser = func(r *http.Request) (int64, error) {
+		return 0, errNotSignedIn
+	}
+
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", response.Code)
+	}
+
+	// Signed-in users should receive only matching public groups.
+	currentUser = func(r *http.Request) (int64, error) {
+		return ownerID, nil
+	}
+
+	request = httptest.NewRequest(http.MethodGet, path, nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+
+	var groups []Group
+	err = json.Unmarshal(response.Body.Bytes(), &groups)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(groups) != 1 || groups[0].ID != publicID {
+		t.Fatal("response should contain only the matching public group")
+	}
+}

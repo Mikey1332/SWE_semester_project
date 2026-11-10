@@ -52,6 +52,21 @@ export function GroupsView({ user, onSignUp }: { user: User | null; onSignUp: ()
       {groups.length === 0 ? <div className="live-empty">You are not in any groups yet.</div> :
         <ul>{groups.map(g => <li key={g.id}><button aria-pressed={g.id === selected} onClick={() => setSelected(g.id)}>{g.name}</button> · ID {g.id} · {g.members} members</li>)}</ul>}
       {selected !== null && <>
+          <button
+          type="button"
+          onClick={() => {
+            run(async () => {
+              await api(user, `/groups/${selected}/leave`, {
+                method: "POST",
+              });
+
+              setSelected(null);
+              setBoard([]);
+            });
+          }}
+        >
+          Leave group
+        </button>
         <div role="group" aria-label="Leaderboard period">{["week", "month", "all"].map(p =>
           <button key={p} aria-pressed={p === period} onClick={() => setPeriod(p)}>{p}</button>)}</div>
         <table><thead><tr><th>Rank</th><th>Player</th><th>P&amp;L</th></tr></thead>

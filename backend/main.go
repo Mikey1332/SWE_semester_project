@@ -42,7 +42,29 @@ func firebaseUser(authClient *auth.Client, db *sql.DB) func(*http.Request) (int6
 			return 0, errNotSignedIn
 		}
 		email, _ := token.Claims["email"].(string)
-		return UserForFirebase(r.Context(), db, token.UID, email)
+
+		userID, err := UserForFirebase(r.Context(), db, token.UID, email)
+		if err != nil {
+			return 0, err
+		}
+
+		// Copy the verified Firebase name into an empty database username.
+		name, _ := token.Claims["name"].(string)
+		name = strings.TrimSpace(name)
+
+		if name != "" {
+			_, err = db.ExecContext(r.Context(), `
+                UPDATE users
+                SET username = $1
+                WHERE id = $2
+                  AND (username IS NULL OR btrim(username) = '')
+            `, name, userID)
+			if err != nil {
+				return 0, err
+			}
+		}
+
+		return userID, nil
 	}
 }
 

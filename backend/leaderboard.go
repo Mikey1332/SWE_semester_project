@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	ErrInvalidPeriod  = errors.New("period must be week, month or all")
+	ErrInvalidPeriod = errors.New("period must be week, month or all")
 )
 
 // Days back from today each leaderboard period covers; 0 means all time.

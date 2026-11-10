@@ -389,6 +389,12 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
             });
         return () => { current = false; };
     }, [fetchAccount]);
+    useEffect(() => {
+        if (!new URLSearchParams(window.location.search).has("join"))
+            return;
+        const t = setTimeout(() => setGroupsOpen(true), 0);
+        return () => clearTimeout(t);
+    }, []);
 
     const selected = markets?.find(m => m.id === selectedId) ?? null;
     const goHome = () => { setSelectedId(null); setInfo(false); setWatchlist(false); setLedger(false); setGroupsOpen(false); setProfile(false); setFilter("All markets"); };

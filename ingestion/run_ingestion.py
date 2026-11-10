@@ -5,10 +5,10 @@ from ingestion import database
 def run_ingestion():
     chart_names = [
         "hot-100",
-        # "country-songs",
-        # "rock-songs",
-        # "pop-songs",
-        # "r-b-hip-hop-songs",
+        "country-songs",
+        "rock-songs",
+        "pop-songs",
+        "r-b-hip-hop-songs",
     ]
 
     for chart_name in chart_names:

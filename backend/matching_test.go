@@ -79,4 +79,3 @@ func TestFindMatchingOrder(t *testing.T) {
 		t.Fatalf("expected no affordable match, got %v", err)
 	}
 }
-

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -41,7 +42,29 @@ func firebaseUser(authClient *auth.Client, db *sql.DB) func(*http.Request) (int6
 			return 0, errNotSignedIn
 		}
 		email, _ := token.Claims["email"].(string)
-		return UserForFirebase(r.Context(), db, token.UID, email)
+
+		userID, err := UserForFirebase(r.Context(), db, token.UID, email)
+		if err != nil {
+			return 0, err
+		}
+
+		// Copy the verified Firebase name into an empty database username.
+		name, _ := token.Claims["name"].(string)
+		name = strings.TrimSpace(name)
+
+		if name != "" {
+			_, err = db.ExecContext(r.Context(), `
+                UPDATE users
+                SET username = $1
+                WHERE id = $2
+                  AND (username IS NULL OR btrim(username) = '')
+            `, name, userID)
+			if err != nil {
+				return 0, err
+			}
+		}
+
+		return userID, nil
 	}
 }
 
@@ -320,12 +343,39 @@ func routes(db *sql.DB) http.Handler {
 		serveLeaderboard(w, r, db, nil)
 	})
 	mux.HandleFunc("GET /groups/{id}/leaderboard", func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+
+		groupID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || groupID <= 0 {
 			http.Error(w, "invalid group id", http.StatusBadRequest)
 			return
 		}
-		serveLeaderboard(w, r, db, &id)
+
+		// Reuse the member-list access check.
+		_, err = GetGroupMembers(r.Context(), db, userID, groupID)
+
+		switch {
+		case errors.Is(err, ErrNoSuchGroup):
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		case errors.Is(err, ErrPrivateGroupAccess):
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		case err != nil:
+			log.Printf("group %d leaderboard access: %v", groupID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		serveLeaderboard(w, r, db, &groupID)
 	})
 	// Adds the signed-in user to a group. 204 on success.
 	mux.HandleFunc("POST /groups/{id}/join", func(w http.ResponseWriter, r *http.Request) {
@@ -333,22 +383,42 @@ func routes(db *sql.DB) http.Handler {
 		if !ok {
 			return
 		}
+
 		if db == nil {
 			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
 			return
 		}
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
+
+		groupID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || groupID <= 0 {
 			http.Error(w, "invalid group id", http.StatusBadRequest)
 			return
 		}
-		switch err := JoinGroup(r.Context(), db, userID, id); {
+
+		var body struct {
+			Code string `json:"code"`
+		}
+
+		// Public groups can be joined without a request body.
+		if r.Body != nil {
+			err = json.NewDecoder(r.Body).Decode(&body)
+			if err != nil && !errors.Is(err, io.EOF) {
+				http.Error(w, "invalid request body", http.StatusBadRequest)
+				return
+			}
+		}
+
+		err = JoinGroup(r.Context(), db, userID, groupID, strings.TrimSpace(body.Code))
+
+		switch {
 		case errors.Is(err, ErrNoSuchGroup):
 			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, ErrInviteRequired), errors.Is(err, ErrInvalidInvite):
+			http.Error(w, err.Error(), http.StatusForbidden)
 		case errors.Is(err, ErrAlreadyMember):
 			http.Error(w, err.Error(), http.StatusConflict)
 		case err != nil:
-			log.Printf("join group %d user %d: %v", id, userID, err)
+			log.Printf("join group %d user %d: %v", groupID, userID, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		default:
 			w.WriteHeader(http.StatusNoContent)
@@ -365,16 +435,15 @@ func routes(db *sql.DB) http.Handler {
 			return
 		}
 		var body struct {
-			Name string `json:"name"`
+			Name      string `json:"name"`
+			IsPrivate bool   `json:"is_private"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Name) == "" {
 			http.Error(w, "group name required", http.StatusBadRequest)
 			return
 		}
-		id, err := CreateGroup(r.Context(), db, strings.TrimSpace(body.Name))
-		if err == nil {
-			err = JoinGroup(r.Context(), db, userID, id) // ponytail: two steps, not one transaction; a failed join leaves an empty group
-		}
+
+		id, code, err := CreateGroup(r.Context(), db, userID, strings.TrimSpace(body.Name), body.IsPrivate)
 		switch {
 		case errors.Is(err, ErrGroupNameTaken):
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -382,7 +451,7 @@ func routes(db *sql.DB) http.Handler {
 			log.Printf("create group: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		default:
-			writeJSON(w, map[string]int64{"id": id})
+			writeJSON(w, map[string]any{"id": id, "is_private": body.IsPrivate, "invite_code": code})
 		}
 	})
 	// The signed-in user's groups with member counts.
@@ -401,6 +470,213 @@ func routes(db *sql.DB) http.Handler {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		writeJSON(w, groups)
+	})
+
+	mux.HandleFunc("POST /groups/{id}/leave", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+
+		groupID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || groupID <= 0 {
+			http.Error(w, "invalid group id", http.StatusBadRequest)
+			return
+		}
+
+		err = LeaveGroup(r.Context(), db, userID, groupID)
+
+		switch {
+		case errors.Is(err, ErrNotGroupMember):
+			http.Error(w, err.Error(), http.StatusForbidden)
+		case errors.Is(err, ErrNoSuchGroup):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, ErrGroupOwnerCannotLeave):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case err != nil:
+			log.Printf("leave group %d user %d: %v", groupID, userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("POST /groups/{id}/members/{memberID}/remove", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+
+		groupID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || groupID <= 0 {
+			http.Error(w, "invalid group id", http.StatusBadRequest)
+			return
+		}
+
+		memberID, err := strconv.ParseInt(r.PathValue("memberID"), 10, 64)
+		if err != nil || memberID <= 0 {
+			http.Error(w, "invalid member id", http.StatusBadRequest)
+			return
+		}
+
+		err = RemoveGroupMember(r.Context(), db, userID, groupID, memberID)
+
+		switch {
+		case errors.Is(err, ErrNoSuchGroup):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, ErrNotGroupOwner):
+			http.Error(w, err.Error(), http.StatusForbidden)
+		case errors.Is(err, ErrCannotRemoveOwner):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case errors.Is(err, ErrNotGroupMember):
+			http.Error(w, "user is not a member of this group", http.StatusNotFound)
+		case err != nil:
+			log.Printf("remove member %d from group %d by user %d: %v", memberID, groupID, userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("GET /groups/{id}/members", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+
+		groupID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || groupID <= 0 {
+			http.Error(w, "invalid group id", http.StatusBadRequest)
+			return
+		}
+
+		members, err := GetGroupMembers(r.Context(), db, userID, groupID)
+
+		switch {
+		case errors.Is(err, ErrNoSuchGroup):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, ErrPrivateGroupAccess):
+			http.Error(w, err.Error(), http.StatusForbidden)
+		case err != nil:
+			log.Printf("group %d members requested by user %d: %v", groupID, userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		default:
+			writeJSON(w, members)
+		}
+	})
+
+	mux.HandleFunc("POST /groups/{id}/owner", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+
+		groupID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || groupID <= 0 {
+			http.Error(w, "invalid group id", http.StatusBadRequest)
+			return
+		}
+
+		var body struct {
+			UserID int64 `json:"user_id"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.UserID <= 0 {
+			http.Error(w, "valid new owner user id required", http.StatusBadRequest)
+			return
+		}
+
+		err = TransferGroupOwnership(r.Context(), db, userID, groupID, body.UserID)
+
+		switch {
+		case errors.Is(err, ErrNoSuchGroup):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, ErrNotGroupOwner):
+			http.Error(w, err.Error(), http.StatusForbidden)
+		case errors.Is(err, ErrAlreadyGroupOwner):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case errors.Is(err, ErrNotGroupMember):
+			http.Error(w, "new owner must already be a group member", http.StatusBadRequest)
+		case err != nil:
+			log.Printf("transfer group %d ownership by user %d: %v", groupID, userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("DELETE /groups/{id}", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+
+		groupID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || groupID <= 0 {
+			http.Error(w, "invalid group id", http.StatusBadRequest)
+			return
+		}
+
+		err = DeleteGroup(r.Context(), db, userID, groupID)
+
+		switch {
+		case errors.Is(err, ErrNoSuchGroup):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, ErrNotGroupOwner):
+			http.Error(w, err.Error(), http.StatusForbidden)
+		case err != nil:
+			log.Printf("delete group %d by user %d: %v", groupID, userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("GET /groups", func(w http.ResponseWriter, r *http.Request) {
+		_, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+
+		search := strings.TrimSpace(r.URL.Query().Get("search"))
+		groups, err := GetPublicGroups(r.Context(), db, search)
+		if err != nil {
+			log.Printf("public groups: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
 		writeJSON(w, groups)
 	})
 

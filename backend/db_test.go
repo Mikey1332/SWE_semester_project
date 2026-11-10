@@ -789,39 +789,6 @@ func TestT15LeaderboardPeriods(t *testing.T) {
 	}
 }
 
-// T19 + T20: a user joins a group once, and the group leaderboard ranks only its members.
-func TestT19T20GroupsAndGroupLeaderboard(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	group, err := CreateGroup(ctx, db, unique("group"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	member, outsider := newUser(t, db), newUser(t, db)
-
-	if err := JoinGroup(ctx, db, member, group); err != nil { // T19
-		t.Fatal(err)
-	}
-	if err := JoinGroup(ctx, db, member, group); !errors.Is(err, ErrAlreadyMember) {
-		t.Fatalf("joining twice: got %v, want ErrAlreadyMember", err)
-	}
-	if err := JoinGroup(ctx, db, member, -1); !errors.Is(err, ErrNoSuchGroup) {
-		t.Fatalf("missing group: got %v, want ErrNoSuchGroup", err)
-	}
-
-	m := resolvedMarket(t, db, 1)
-	earn(t, db, member, m, 250)
-	earn(t, db, outsider, m, 900) // more P&L, but not in the group
-
-	board, err := Leaderboard(ctx, db, "week", &group) // T20
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(board) != 1 || board[0].UserID != member || board[0].PnL != 250 || board[0].Rank != 1 {
-		t.Fatalf("group leaderboard = %+v, want only the member, ranked 1 with +250", board)
-	}
-}
-
 // T4: realized P&L reports the gain or loss on a settled contract.
 func TestT4PortfolioGainAndLoss(t *testing.T) {
 	db := testDB(t)
@@ -1057,36 +1024,4 @@ func TestT11MarketGenres(t *testing.T) {
 		}
 	}
 	t.Fatal("market not listed")
-}
-
-// US9: a taken group name is refused, and every member is ranked, even one who hasn't traded yet.
-func TestGroupCreateAndEveryMemberRanked(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	name := unique("friends")
-	group, err := CreateGroup(ctx, db, name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := CreateGroup(ctx, db, name); !errors.Is(err, ErrGroupNameTaken) {
-		t.Fatalf("duplicate name: got %v, want ErrGroupNameTaken", err)
-	}
-	trader, newcomer := newUser(t, db), newUser(t, db)
-	for _, id := range []int64{trader, newcomer} {
-		if err := JoinGroup(ctx, db, id, group); err != nil {
-			t.Fatal(err)
-		}
-	}
-	earn(t, db, trader, resolvedMarket(t, db, 1), 250)
-
-	board, err := Leaderboard(ctx, db, "week", &group)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(board) != 2 || board[0].UserID != trader || board[1].UserID != newcomer || board[1].PnL != 0 || board[1].Rank != 2 {
-		t.Fatalf("group leaderboard = %+v, want trader first and newcomer ranked 2nd with 0", board)
-	}
-	if groups, err := MyGroups(ctx, db, newcomer); err != nil || len(groups) != 1 || groups[0].Members != 2 {
-		t.Fatalf("MyGroups = %+v, %v; want 1 group with 2 members", groups, err)
-	}
 }

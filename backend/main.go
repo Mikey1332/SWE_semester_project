@@ -404,6 +404,36 @@ func routes(db *sql.DB) http.Handler {
 		writeJSON(w, groups)
 	})
 
+	mux.HandleFunc("POST /groups/{id}/leave", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+
+		groupID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || groupID <= 0 {
+			http.Error(w, "invalid group id", http.StatusBadRequest)
+			return
+		}
+
+		err = LeaveGroup(r.Context(), db, userID, groupID)
+
+		switch {
+		case errors.Is(err, ErrNotGroupMember):
+			http.Error(w, err.Error(), http.StatusForbidden)
+		case err != nil:
+			log.Printf("leave group %d user %d: %v", groupID, userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
 	return mux
 }
 

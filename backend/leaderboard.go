@@ -8,19 +8,10 @@ import (
 
 var (
 	ErrInvalidPeriod  = errors.New("period must be week, month or all")
-	ErrNoSuchGroup    = errors.New("group does not exist")
-	ErrAlreadyMember  = errors.New("already a member of this group")
-	ErrGroupNameTaken = errors.New("a group with that name already exists")
 )
 
 // Days back from today each leaderboard period covers; 0 means all time.
 var leaderboardDays = map[string]int{"week": 7, "month": 30, "all": 0}
-
-type Group struct {
-	ID      int64  `json:"id"`
-	Name    string `json:"name"`
-	Members int    `json:"members"`
-}
 
 type LeaderboardRow struct {
 	Rank   int    `json:"rank"`
@@ -59,55 +50,4 @@ func Leaderboard(ctx context.Context, db *sql.DB, period string, groupID *int64)
 		board = append(board, r)
 	}
 	return board, rows.Err()
-}
-
-func CreateGroup(ctx context.Context, db *sql.DB, name string) (int64, error) {
-	var id int64
-	err := db.QueryRowContext(ctx,
-		`INSERT INTO user_groups (name) VALUES ($1) ON CONFLICT (name) DO NOTHING RETURNING id`, name).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, ErrGroupNameTaken
-	}
-	return id, err
-}
-
-// MyGroups lists the groups the user belongs to, with each group's member count.
-func MyGroups(ctx context.Context, db *sql.DB, userID int64) ([]Group, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT g.id, g.name, (SELECT count(*) FROM group_members c WHERE c.group_id = g.id)
-		FROM user_groups g JOIN group_members m ON m.group_id = g.id
-		WHERE m.user_id = $1
-		ORDER BY g.name`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	groups := []Group{}
-	for rows.Next() {
-		var g Group
-		if err := rows.Scan(&g.ID, &g.Name, &g.Members); err != nil {
-			return nil, err
-		}
-		groups = append(groups, g)
-	}
-	return groups, rows.Err()
-}
-
-func JoinGroup(ctx context.Context, db *sql.DB, userID, groupID int64) error {
-	var exists bool
-	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM user_groups WHERE id = $1)`, groupID).Scan(&exists); err != nil {
-		return err
-	}
-	if !exists {
-		return ErrNoSuchGroup
-	}
-	res, err := db.ExecContext(ctx,
-		`INSERT INTO group_members (group_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, groupID, userID)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrAlreadyMember
-	}
-	return nil
 }

@@ -365,16 +365,15 @@ func routes(db *sql.DB) http.Handler {
 			return
 		}
 		var body struct {
-			Name string `json:"name"`
+			Name      string `json:"name"`
+			IsPrivate bool   `json:"is_private"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Name) == "" {
 			http.Error(w, "group name required", http.StatusBadRequest)
 			return
 		}
-		id, err := CreateGroup(r.Context(), db, strings.TrimSpace(body.Name))
-		if err == nil {
-			err = JoinGroup(r.Context(), db, userID, id) // ponytail: two steps, not one transaction; a failed join leaves an empty group
-		}
+
+		id, code, err := CreateGroup(r.Context(), db, userID, strings.TrimSpace(body.Name), body.IsPrivate)
 		switch {
 		case errors.Is(err, ErrGroupNameTaken):
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -382,7 +381,7 @@ func routes(db *sql.DB) http.Handler {
 			log.Printf("create group: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		default:
-			writeJSON(w, map[string]int64{"id": id})
+			writeJSON(w, map[string]any{"id": id, "is_private": body.IsPrivate, "invite_code": code})
 		}
 	})
 	// The signed-in user's groups with member counts.

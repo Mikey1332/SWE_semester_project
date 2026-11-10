@@ -56,8 +56,6 @@ func signedIn(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	case errors.Is(err, errNotSignedIn):
 		http.Error(w, "sign-in required", http.StatusUnauthorized)
 		return 0, false
-	case errors.Is(err, ErrInviteRequired):
-		http.Error(w, err.Error(), http.StatusForbidden)
 	case err != nil:
 		log.Printf("sign-in: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -448,8 +446,54 @@ func routes(db *sql.DB) http.Handler {
 		switch {
 		case errors.Is(err, ErrNotGroupMember):
 			http.Error(w, err.Error(), http.StatusForbidden)
+		case errors.Is(err, ErrNoSuchGroup):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, ErrGroupOwnerCannotLeave):
+			http.Error(w, err.Error(), http.StatusConflict)
 		case err != nil:
 			log.Printf("leave group %d user %d: %v", groupID, userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("POST /groups/{id}/members/{memberID}/remove", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+
+		groupID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || groupID <= 0 {
+			http.Error(w, "invalid group id", http.StatusBadRequest)
+			return
+		}
+
+		memberID, err := strconv.ParseInt(r.PathValue("memberID"), 10, 64)
+		if err != nil || memberID <= 0 {
+			http.Error(w, "invalid member id", http.StatusBadRequest)
+			return
+		}
+
+		err = RemoveGroupMember(r.Context(), db, userID, groupID, memberID)
+
+		switch {
+		case errors.Is(err, ErrNoSuchGroup):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, ErrNotGroupOwner):
+			http.Error(w, err.Error(), http.StatusForbidden)
+		case errors.Is(err, ErrCannotRemoveOwner):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case errors.Is(err, ErrNotGroupMember):
+			http.Error(w, "user is not a member of this group", http.StatusNotFound)
+		case err != nil:
+			log.Printf("remove member %d from group %d by user %d: %v", memberID, groupID, userID, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		default:
 			w.WriteHeader(http.StatusNoContent)

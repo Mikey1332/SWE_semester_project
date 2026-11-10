@@ -9,12 +9,15 @@ import (
 )
 
 var (
-	ErrNotGroupMember = errors.New("you are not a member of this group")
-	ErrNoSuchGroup    = errors.New("group does not exist")
-	ErrAlreadyMember  = errors.New("already a member of this group")
-	ErrGroupNameTaken = errors.New("a group with that name already exists")
-	ErrInviteRequired = errors.New("an invite code is required to join this group")
-	ErrInvalidInvite  = errors.New("invalid invite code")
+	ErrNotGroupMember        = errors.New("you are not a member of this group")
+	ErrNoSuchGroup           = errors.New("group does not exist")
+	ErrAlreadyMember         = errors.New("already a member of this group")
+	ErrGroupNameTaken        = errors.New("a group with that name already exists")
+	ErrInviteRequired        = errors.New("an invite code is required to join this group")
+	ErrInvalidInvite         = errors.New("invalid invite code")
+	ErrGroupOwnerCannotLeave = errors.New("transfer ownership or delete the group before leaving")
+	ErrNotGroupOwner         = errors.New("group owner permissions required")
+	ErrCannotRemoveOwner     = errors.New("the group owner cannot be removed")
 )
 
 type Group struct {
@@ -159,10 +162,31 @@ func JoinGroup(ctx context.Context, db *sql.DB, userID, groupID int64, code stri
 }
 
 func LeaveGroup(ctx context.Context, db *sql.DB, userID, groupID int64) error {
-	result, err := db.ExecContext(ctx,
-		"DELETE FROM group_members WHERE group_id = $1 AND user_id = $2",
-		groupID, userID,
-	)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Lock the group while checking ownership and removing membership.
+	var ownerID sql.NullInt64
+
+	query := "SELECT owner_id FROM user_groups WHERE id = $1 FOR UPDATE"
+	err = tx.QueryRowContext(ctx, query, groupID).Scan(&ownerID)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNoSuchGroup
+	}
+	if err != nil {
+		return err
+	}
+
+	if ownerID.Valid && ownerID.Int64 == userID {
+		return ErrGroupOwnerCannotLeave
+	}
+
+	query = "DELETE FROM group_members WHERE group_id = $1 AND user_id = $2"
+	result, err := tx.ExecContext(ctx, query, groupID, userID)
 	if err != nil {
 		return err
 	}
@@ -176,7 +200,7 @@ func LeaveGroup(ctx context.Context, db *sql.DB, userID, groupID int64) error {
 		return ErrNotGroupMember
 	}
 
-	return nil
+	return tx.Commit()
 }
 
 func generateInviteCode() (string, error) {
@@ -188,4 +212,50 @@ func generateInviteCode() (string, error) {
 	}
 
 	return hex.EncodeToString(code), nil
+}
+
+func RemoveGroupMember(ctx context.Context, db *sql.DB, userID, groupID, memberID int64) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Lock the group so ownership cannot change during removal.
+	var ownerID sql.NullInt64
+
+	query := "SELECT owner_id FROM user_groups WHERE id = $1 FOR UPDATE"
+	err = tx.QueryRowContext(ctx, query, groupID).Scan(&ownerID)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNoSuchGroup
+	}
+	if err != nil {
+		return err
+	}
+
+	if !ownerID.Valid || ownerID.Int64 != userID {
+		return ErrNotGroupOwner
+	}
+
+	if memberID == ownerID.Int64 {
+		return ErrCannotRemoveOwner
+	}
+
+	query = "DELETE FROM group_members WHERE group_id = $1 AND user_id = $2"
+	result, err := tx.ExecContext(ctx, query, groupID, memberID)
+	if err != nil {
+		return err
+	}
+
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if deleted == 0 {
+		return ErrNotGroupMember
+	}
+
+	return tx.Commit()
 }

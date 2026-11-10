@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -334,5 +336,225 @@ func TestInvalidGroupInvite(t *testing.T) {
 
 	if count != 0 {
 		t.Fatal("invalid invite should not create a membership")
+	}
+}
+
+// US9: the owner cannot leave and abandon their group.
+func TestGroupOwnerCannotLeave(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	ownerID := newUser(t, db)
+
+	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("owner"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = LeaveGroup(ctx, db, ownerID, groupID)
+	if !errors.Is(err, ErrGroupOwnerCannotLeave) {
+		t.Fatalf("expected ErrGroupOwnerCannotLeave, got %v", err)
+	}
+
+	// The rejected action must leave the owner's membership intact.
+	var count int
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
+		groupID, ownerID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != 1 {
+		t.Fatal("owner should still be a member")
+	}
+}
+
+// US9: the group owner can remove a member.
+func TestOwnerCanRemoveGroupMember(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	ownerID := newUser(t, db)
+	memberID := newUser(t, db)
+
+	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("remove"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = JoinGroup(ctx, db, memberID, groupID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = RemoveGroupMember(ctx, db, ownerID, groupID, memberID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
+		groupID, memberID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != 0 {
+		t.Fatal("member should have been removed")
+	}
+}
+
+// US9: a regular member cannot remove another member.
+func TestMemberCannotRemoveGroupMember(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	ownerID := newUser(t, db)
+	memberID := newUser(t, db)
+	otherMemberID := newUser(t, db)
+
+	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("permissions"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = JoinGroup(ctx, db, memberID, groupID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = JoinGroup(ctx, db, otherMemberID, groupID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = RemoveGroupMember(ctx, db, memberID, groupID, otherMemberID)
+	if !errors.Is(err, ErrNotGroupOwner) {
+		t.Fatalf("expected ErrNotGroupOwner, got %v", err)
+	}
+
+	var count int
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
+		groupID, otherMemberID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != 1 {
+		t.Fatal("member should still belong to the group")
+	}
+}
+
+// US9: the owner cannot remove their own membership.
+func TestOwnerCannotRemoveThemselves(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	ownerID := newUser(t, db)
+
+	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("owner"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = RemoveGroupMember(ctx, db, ownerID, groupID, ownerID)
+	if !errors.Is(err, ErrCannotRemoveOwner) {
+		t.Fatalf("expected ErrCannotRemoveOwner, got %v", err)
+	}
+
+	var count int
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
+		groupID, ownerID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != 1 {
+		t.Fatal("owner should still belong to the group")
+	}
+}
+
+// US9: the removal API rejects regular members and allows the owner.
+func TestRemoveGroupMemberAPI(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	ownerID := newUser(t, db)
+	memberID := newUser(t, db)
+
+	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("remove-api"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = JoinGroup(ctx, db, memberID, groupID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Restore normal authentication after this test.
+	originalCurrentUser := currentUser
+	t.Cleanup(func() {
+		currentUser = originalCurrentUser
+	})
+
+	path := fmt.Sprintf("/groups/%d/members/%d/remove", groupID, memberID)
+	handler := routes(db)
+
+	// Simulate a request from a regular member.
+	currentUser = func(r *http.Request) (int64, error) {
+		return memberID, nil
+	}
+
+	request := httptest.NewRequest(http.MethodPost, path, nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for regular member, got %d", response.Code)
+	}
+
+	// Confirm the rejected request did not remove the member.
+	var count int
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
+		groupID, memberID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != 1 {
+		t.Fatal("rejected request should not remove the member")
+	}
+
+	// Simulate a request from the owner.
+	currentUser = func(r *http.Request) (int64, error) {
+		return ownerID, nil
+	}
+
+	request = httptest.NewRequest(http.MethodPost, path, nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 for owner, got %d: %s", response.Code, response.Body.String())
+	}
+
+	// Confirm the successful request removed the member.
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
+		groupID, memberID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != 0 {
+		t.Fatal("owner's request should remove the member")
 	}
 }

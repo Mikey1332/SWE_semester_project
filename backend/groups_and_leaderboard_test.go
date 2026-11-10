@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"testing"
@@ -117,5 +118,119 @@ func TestGroupCreateAndEveryMemberRanked(t *testing.T) {
 	}
 	if groups, err := MyGroups(ctx, db, newcomer); err != nil || len(groups) != 1 || groups[0].Members != 2 {
 		t.Fatalf("MyGroups = %+v, %v; want 1 group with 2 members", groups, err)
+	}
+}
+
+// US9: a public group records its owner and does not create an invite code.
+func TestCreatePublicGroup(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	ownerID := newUser(t, db)
+
+	groupID, code, err := CreateGroup(ctx, db, ownerID, unique("public"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code != "" {
+		t.Fatal("public group should not return an invite code")
+	}
+
+	var savedOwnerID int64
+	var isPrivate bool
+
+	err = db.QueryRowContext(ctx,
+		"SELECT owner_id, is_private FROM user_groups WHERE id = $1",
+		groupID,
+	).Scan(&savedOwnerID, &isPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if savedOwnerID != ownerID {
+		t.Fatal("incorrect group owner")
+	}
+
+	if isPrivate {
+		t.Fatal("group should be public")
+	}
+
+	var inviteCount int
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM group_invites WHERE group_id = $1",
+		groupID,
+	).Scan(&inviteCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if inviteCount != 0 {
+		t.Fatal("public group should not have a saved invite code")
+	}
+}
+
+// US9: a private group records its owner and saves a 32-character invite code.
+func TestCreatePrivateGroup(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	ownerID := newUser(t, db)
+
+	groupID, code, err := CreateGroup(ctx, db, ownerID, unique("private"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(code) != 32 {
+		t.Fatal("invite code should contain 32 characters")
+	}
+
+	decoded, err := hex.DecodeString(code)
+	if err != nil || len(decoded) != 16 {
+		t.Fatal("invite code should represent 16 bytes in hexadecimal")
+	}
+
+	var savedOwnerID int64
+	var isPrivate bool
+
+	err = db.QueryRowContext(ctx,
+		"SELECT owner_id, is_private FROM user_groups WHERE id = $1",
+		groupID,
+	).Scan(&savedOwnerID, &isPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if savedOwnerID != ownerID {
+		t.Fatal("incorrect group owner")
+	}
+
+	if !isPrivate {
+		t.Fatal("group should be private")
+	}
+
+	var savedCode string
+	err = db.QueryRowContext(ctx,
+		"SELECT code FROM group_invites WHERE group_id = $1",
+		groupID,
+	).Scan(&savedCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if savedCode != code {
+		t.Fatal("saved invite code does not match the returned code")
+	}
+
+	var memberCount int
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
+		groupID, ownerID,
+	).Scan(&memberCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if memberCount != 1 {
+		t.Fatal("owner should be a member of the private group")
 	}
 }

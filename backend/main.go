@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -55,6 +56,8 @@ func signedIn(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	case errors.Is(err, errNotSignedIn):
 		http.Error(w, "sign-in required", http.StatusUnauthorized)
 		return 0, false
+	case errors.Is(err, ErrInviteRequired):
+		http.Error(w, err.Error(), http.StatusForbidden)
 	case err != nil:
 		log.Printf("sign-in: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -333,22 +336,42 @@ func routes(db *sql.DB) http.Handler {
 		if !ok {
 			return
 		}
+
 		if db == nil {
 			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
 			return
 		}
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
+
+		groupID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || groupID <= 0 {
 			http.Error(w, "invalid group id", http.StatusBadRequest)
 			return
 		}
-		switch err := JoinGroup(r.Context(), db, userID, id); {
+
+		var body struct {
+			Code string `json:"code"`
+		}
+
+		// Public groups can be joined without a request body.
+		if r.Body != nil {
+			err = json.NewDecoder(r.Body).Decode(&body)
+			if err != nil && !errors.Is(err, io.EOF) {
+				http.Error(w, "invalid request body", http.StatusBadRequest)
+				return
+			}
+		}
+
+		err = JoinGroup(r.Context(), db, userID, groupID, strings.TrimSpace(body.Code))
+
+		switch {
 		case errors.Is(err, ErrNoSuchGroup):
 			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, ErrInviteRequired), errors.Is(err, ErrInvalidInvite):
+			http.Error(w, err.Error(), http.StatusForbidden)
 		case errors.Is(err, ErrAlreadyMember):
 			http.Error(w, err.Error(), http.StatusConflict)
 		case err != nil:
-			log.Printf("join group %d user %d: %v", id, userID, err)
+			log.Printf("join group %d user %d: %v", groupID, userID, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		default:
 			w.WriteHeader(http.StatusNoContent)

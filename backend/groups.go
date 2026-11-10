@@ -13,6 +13,8 @@ var (
 	ErrNoSuchGroup    = errors.New("group does not exist")
 	ErrAlreadyMember  = errors.New("already a member of this group")
 	ErrGroupNameTaken = errors.New("a group with that name already exists")
+	ErrInviteRequired = errors.New("an invite code is required to join this group")
+	ErrInvalidInvite  = errors.New("invalid invite code")
 )
 
 type Group struct {
@@ -98,23 +100,62 @@ func CreateGroup(ctx context.Context, db *sql.DB, userID int64, name string, isP
 	return groupID, code, nil
 }
 
-func JoinGroup(ctx context.Context, db *sql.DB, userID, groupID int64) error {
-	var exists bool
-	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM user_groups WHERE id = $1)`, groupID).Scan(&exists); err != nil {
-		return err
-	}
-	if !exists {
-		return ErrNoSuchGroup
-	}
-	res, err := db.ExecContext(ctx,
-		`INSERT INTO group_members (group_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, groupID, userID)
+func JoinGroup(ctx context.Context, db *sql.DB, userID, groupID int64, code string) error {
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	defer tx.Rollback()
+
+	// Check whether the group exists and is private.
+	var isPrivate bool
+
+	query := "SELECT is_private FROM user_groups WHERE id = $1 FOR SHARE"
+	err = tx.QueryRowContext(ctx, query, groupID).Scan(&isPrivate)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNoSuchGroup
+	}
+	if err != nil {
+		return err
+	}
+
+	// Private groups require an invitation for this specific group.
+	if isPrivate {
+		if code == "" {
+			return ErrInviteRequired
+		}
+
+		var savedCode string
+
+		query = "SELECT code FROM group_invites WHERE group_id = $1 AND code = $2 FOR SHARE"
+		err = tx.QueryRowContext(ctx, query, groupID, code).Scan(&savedCode)
+
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrInvalidInvite
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	// Add the user unless they already belong to the group.
+	query = "INSERT INTO group_members (group_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING"
+	result, err := tx.ExecContext(ctx, query, groupID, userID)
+	if err != nil {
+		return err
+	}
+
+	added, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if added == 0 {
 		return ErrAlreadyMember
 	}
-	return nil
+
+	return tx.Commit()
 }
 
 func LeaveGroup(ctx context.Context, db *sql.DB, userID, groupID int64) error {

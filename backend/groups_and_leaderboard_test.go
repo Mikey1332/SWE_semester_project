@@ -27,7 +27,7 @@ func TestLeaveGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = JoinGroup(ctx, db, userID, groupID)
+	err = JoinGroup(ctx, db, userID, groupID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,10 +68,10 @@ func TestT19T20GroupsAndGroupLeaderboard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := JoinGroup(ctx, db, member, group); !errors.Is(err, ErrAlreadyMember) {
+	if err := JoinGroup(ctx, db, member, group, ""); !errors.Is(err, ErrAlreadyMember) {
 		t.Fatalf("joining twice: got %v, want ErrAlreadyMember", err)
 	}
-	if err := JoinGroup(ctx, db, member, -1); !errors.Is(err, ErrNoSuchGroup) {
+	if err := JoinGroup(ctx, db, member, -1, ""); !errors.Is(err, ErrNoSuchGroup) {
 		t.Fatalf("missing group: got %v, want ErrNoSuchGroup", err)
 	}
 
@@ -104,7 +104,7 @@ func TestGroupCreateAndEveryMemberRanked(t *testing.T) {
 		t.Fatalf("duplicate name: got %v, want ErrGroupNameTaken", err)
 	}
 
-	if err := JoinGroup(ctx, db, newcomer, group); err != nil {
+	if err := JoinGroup(ctx, db, newcomer, group, ""); err != nil {
 		t.Fatal(err)
 	}
 	earn(t, db, trader, resolvedMarket(t, db, 1), 250)
@@ -232,5 +232,107 @@ func TestCreatePrivateGroup(t *testing.T) {
 
 	if memberCount != 1 {
 		t.Fatal("owner should be a member of the private group")
+	}
+}
+
+// US9: a private group cannot be joined using only its group ID.
+func TestPrivateGroupRequiresInvite(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	ownerID := newUser(t, db)
+	userID := newUser(t, db)
+
+	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("private"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = JoinGroup(ctx, db, userID, groupID, "")
+	if !errors.Is(err, ErrInviteRequired) {
+		t.Fatalf("expected ErrInviteRequired, got %v", err)
+	}
+
+	// Check the rejected user was not added.
+	var count int
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
+		groupID, userID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != 0 {
+		t.Fatal("user should not have joined the private group")
+	}
+}
+
+// US9: a user can join a private group with a valid invite code.
+func TestJoinGroupByInvite(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	ownerID := newUser(t, db)
+	userID := newUser(t, db)
+
+	groupID, code, err := CreateGroup(ctx, db, ownerID, unique("private"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = JoinGroup(ctx, db, userID, groupID, code)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
+		groupID, userID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != 1 {
+		t.Fatal("user should be a member of the group")
+	}
+
+	// Using the invitation again must not add a duplicate membership.
+	err = JoinGroup(ctx, db, userID, groupID, code)
+	if !errors.Is(err, ErrAlreadyMember) {
+		t.Fatalf("expected ErrAlreadyMember, got %v", err)
+	}
+}
+
+// US9: an invalid invite code does not add the user to any group.
+func TestInvalidGroupInvite(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	userID := newUser(t, db)
+
+	ownerID := newUser(t, db)
+	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("private"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = JoinGroup(ctx, db, userID, groupID, "invalid-code")
+	if !errors.Is(err, ErrInvalidInvite) {
+		t.Fatalf("expected ErrInvalidInvite, got %v", err)
+	}
+
+	var count int
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM group_members WHERE user_id = $1",
+		userID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != 0 {
+		t.Fatal("invalid invite should not create a membership")
 	}
 }

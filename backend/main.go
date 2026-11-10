@@ -278,6 +278,10 @@ func routes(db *sql.DB) http.Handler {
 		writeJSON(w, entries)
 	})
 
+	mux.HandleFunc("GET /me/profile", func(w http.ResponseWriter, r *http.Request) {
+		serveProfile(w, r, db)
+	})
+
 	// Body: {"side": "yes" | "no", "quantity": n}. Returns {"balance": n}. Written out beacuse it caused an errors
 	mux.HandleFunc("POST /markets/{id}/orders", func(w http.ResponseWriter, r *http.Request) {
 		orderHandler(w, r, db)

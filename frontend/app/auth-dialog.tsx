@@ -34,8 +34,10 @@ export function AuthDialog({ mode, onClose }: {
                 const email = String(data.get("email"));
                 const password = String(data.get("password"));
                 const result = currentMode === "signup" ? await createUserWithEmailAndPassword(auth, email, password) : await signInWithEmailAndPassword(auth, email, password);
-                if (currentMode === "signup")
+                if (currentMode === "signup") {
                     await updateProfile(result.user, { displayName: username });
+                    await result.user.reload();
+                }
                 const idToken = await result.user.getIdToken();
                 const response = await fetch("/api/auth/me", { headers: { Authorization: `Bearer ${idToken}` } });
                 if (!response.ok)

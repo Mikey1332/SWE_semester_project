@@ -152,3 +152,85 @@ export function rankPath(ranks: number[], width: number, height: number, pad = 2
         : pad + (Math.min(Math.max(rank, best), worst) - best) / (worst - best) * (height - 2 * pad);
     return points.map((rank, i) => `${i ? "L" : "M"}${+(i / (points.length - 1) * width).toFixed(1)} ${+y(rank).toFixed(1)}`).join(" ");
 }
+
+export type ActivePosition = {
+    market_id: number;
+    title: string;
+    artist: string;
+    chart_date: string;
+    baseline_rank: number;
+    shift: number;
+    side: TradeSide;
+    quantity: number;
+    reserved_sell: number;
+    cost_basis: number;
+    current_price: number;
+    market_value: number;
+    unrealized_pnl: number;
+};
+
+export type ResolvedPosition = {
+    market_id: number;
+    title: string;
+    artist: string;
+    chart_date: string;
+    baseline_rank: number;
+    shift: number;
+    side: TradeSide;
+    contracts: number;
+    cost_basis: number;
+    proceeds: number;
+    realized_pnl: number;
+    outcome: TradeSide | "refund" | "";
+    result: "Won" | "Lost" | "Refunded";
+};
+
+export type PendingProfileOrder = {
+    order_id: number;
+    market_id: number;
+    title: string;
+    artist: string;
+    chart_date: string;
+    baseline_rank: number;
+    shift: number;
+    side: TradeSide;
+    action: TradeAction;
+    price: number;
+    quantity: number;
+    remaining: number;
+};
+
+export type ProfileData = {
+    user_id: number;
+    uid: string;
+    username: string;
+    email: string;
+    balance: number;
+    reserved_cash: number;
+    available_balance: number;
+    portfolio_value: number;
+    realized_pnl: number;
+    unrealized_pnl: number;
+    total_pnl: number;
+    wins: number;
+    losses: number;
+    refunds: number;
+    active_positions: ActivePosition[];
+    pending_orders: PendingProfileOrder[];
+    resolved_positions: ResolvedPosition[];
+};
+
+export function formatNotes(amount: number): string {
+    if (amount >= 0) {
+        return "+♫ " + amount.toLocaleString();
+    }
+    return "−♫ " + Math.abs(amount).toLocaleString();
+}
+
+export function winRatePercent(wins: number, losses: number): number | null {
+    const total = wins + losses;
+    if (total === 0) {
+        return null;
+    }
+    return Math.round((wins / total) * 100);
+}

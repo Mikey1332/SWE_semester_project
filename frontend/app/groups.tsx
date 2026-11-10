@@ -4,7 +4,7 @@ import "./groups.css";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { User } from "firebase/auth";
 
-type Group = { id: number; name: string; members: number; is_private?: boolean; is_owner?: boolean };
+type Group = { id: number; name: string; members: number; is_private?: boolean; is_owner?: boolean; invite_code?: string };
 type Member = { user_id: number; name: string; is_owner: boolean };
 type Row = { rank: number; user_id: number; name: string; pnl: number };
 type Created = { id: number; invite_code?: string };
@@ -318,7 +318,13 @@ function InviteButton({ group, code, onCopy }: {
     group: Group; code?: string;
     onCopy: (group: Group, code?: string, format?: InviteFormat) => void;
 }) {
-    if (group.is_private && !code) return null;
+    if (!group.is_private)
+    return <button type="button" className="groups-btn"
+        onClick={() => onCopy(group, undefined, "link")}>
+      Invite friends
+    </button>;
+
+    if (!code) return null;
 
     return <details className="groups-menu">
       <summary className="groups-btn">Invite friends</summary>
@@ -754,7 +760,11 @@ function SignedInGroups({ user }: { user: User }) {
 
     const current = groups.find(group => group.id === selected);
     const invite = (group: Group) =>
-        <InviteButton group={group} code={codes[group.id]} onCopy={copyInvite}/>;
+        <InviteButton
+            group={group}
+            code={group.invite_code || codes[group.id]}
+            onCopy={copyInvite}
+        />;
 
     const invited = validID(prefill.id) && !prefill.code
         ? { id: prefill.id, name: publicGroups.find(group => group.id === prefill.id)?.name }

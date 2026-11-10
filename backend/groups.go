@@ -23,11 +23,12 @@ var (
 )
 
 type Group struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	Members   int    `json:"members"`
-	IsPrivate bool   `json:"is_private"`
-	IsOwner   bool   `json:"is_owner"` //this is a quick way to identify if user is owner so we don't iterate through member list every time.
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Members    int    `json:"members"`
+	IsPrivate  bool   `json:"is_private"`
+	IsOwner    bool   `json:"is_owner"` //this is a quick way to identify if user is owner so we don't iterate through member list every time.
+	InviteCode string `json:"invite_code,omitempty"`
 }
 
 type GroupMember struct {
@@ -42,7 +43,17 @@ func MyGroups(ctx context.Context, db *sql.DB, userID int64) ([]Group, error) {
         SELECT g.id, g.name,
                (SELECT COUNT(*) FROM group_members c WHERE c.group_id = g.id),
                g.is_private,
-               COALESCE(g.owner_id = $1, false)
+               COALESCE(g.owner_id = $1, false),
+               CASE
+                   WHEN g.owner_id = $1 AND g.is_private THEN
+                       COALESCE((
+                           SELECT i.code
+                           FROM group_invites i
+                           WHERE i.group_id = g.id
+                           LIMIT 1
+                       ), '')
+                   ELSE ''
+               END
         FROM user_groups g
         JOIN group_members m ON m.group_id = g.id
         WHERE m.user_id = $1
@@ -54,7 +65,7 @@ func MyGroups(ctx context.Context, db *sql.DB, userID int64) ([]Group, error) {
 	groups := []Group{}
 	for rows.Next() {
 		var g Group
-		if err := rows.Scan(&g.ID, &g.Name, &g.Members, &g.IsPrivate, &g.IsOwner); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.Members, &g.IsPrivate, &g.IsOwner, &g.InviteCode); err != nil {
 			return nil, err
 		}
 		groups = append(groups, g)

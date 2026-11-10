@@ -18,12 +18,19 @@ var (
 	ErrGroupOwnerCannotLeave = errors.New("transfer ownership or delete the group before leaving")
 	ErrNotGroupOwner         = errors.New("group owner permissions required")
 	ErrCannotRemoveOwner     = errors.New("the group owner cannot be removed")
+	ErrPrivateGroupAccess    = errors.New("group membership required")
 )
 
 type Group struct {
 	ID      int64  `json:"id"`
 	Name    string `json:"name"`
 	Members int    `json:"members"`
+}
+
+type GroupMember struct {
+	UserID  int64  `json:"user_id"`
+	Name    string `json:"name"`
+	IsOwner bool   `json:"is_owner"`
 }
 
 // MyGroups lists the groups the user belongs to, with each group's member count.
@@ -258,4 +265,72 @@ func RemoveGroupMember(ctx context.Context, db *sql.DB, userID, groupID, memberI
 	}
 
 	return tx.Commit()
+}
+
+func GetGroupMembers(ctx context.Context, db *sql.DB, userID, groupID int64) ([]GroupMember, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var isPrivate bool
+
+	query := "SELECT is_private FROM user_groups WHERE id = $1 FOR SHARE"
+	err = tx.QueryRowContext(ctx, query, groupID).Scan(&isPrivate)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNoSuchGroup
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Only members can view a private group's members.
+	if isPrivate {
+		var isMember bool
+
+		query = "SELECT EXISTS (SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2)"
+		err = tx.QueryRowContext(ctx, query, groupID, userID).Scan(&isMember)
+		if err != nil {
+			return nil, err
+		}
+
+		if !isMember {
+			return nil, ErrPrivateGroupAccess
+		}
+	}
+
+	query = "SELECT u.id, COALESCE(NULLIF(u.username, ''), 'Player ' || u.id), COALESCE(u.id = g.owner_id, false) FROM group_members m JOIN users u ON u.id = m.user_id JOIN user_groups g ON g.id = m.group_id WHERE m.group_id = $1 ORDER BY m.joined_at, u.id"
+	rows, err := tx.QueryContext(ctx, query, groupID)
+	if err != nil {
+		return nil, err
+	}
+
+	members := []GroupMember{}
+
+	for rows.Next() {
+		var member GroupMember
+
+		err = rows.Scan(&member.UserID, &member.Name, &member.IsOwner)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+
+		members = append(members, member)
+	}
+
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+
+	return members, nil
 }

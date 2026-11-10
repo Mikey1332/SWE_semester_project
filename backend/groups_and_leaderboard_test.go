@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -478,7 +479,6 @@ func TestOwnerCannotRemoveThemselves(t *testing.T) {
 	}
 }
 
-// US9: the removal API rejects regular members and allows the owner.
 func TestRemoveGroupMemberAPI(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
@@ -556,5 +556,217 @@ func TestRemoveGroupMemberAPI(t *testing.T) {
 
 	if count != 0 {
 		t.Fatal("owner's request should remove the member")
+	}
+}
+
+// US9: private-group members can view the member list
+func TestPrivateGroupMembersCanViewMembers(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	ownerID := newUser(t, db)
+	memberID := newUser(t, db)
+
+	groupID, code, err := CreateGroup(ctx, db, ownerID, unique("private-members"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = JoinGroup(ctx, db, memberID, groupID, code)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	members, err := GetGroupMembers(ctx, db, memberID, groupID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(members) != 2 {
+		t.Fatalf("expected 2 members, got %d", len(members))
+	}
+
+	ownerFound := false
+	memberFound := false
+
+	for _, member := range members {
+		if member.UserID == ownerID {
+			ownerFound = true
+			if !member.IsOwner {
+				t.Fatal("owner should be marked as owner")
+			}
+		}
+
+		if member.UserID == memberID {
+			memberFound = true
+			if member.IsOwner {
+				t.Fatal("regular member should not be marked as owner")
+			}
+		}
+	}
+
+	if !ownerFound || !memberFound {
+		t.Fatal("member list should contain the owner and joined member")
+	}
+}
+
+// US9: outsiders cannot view a private group's members.
+func TestOutsiderCannotViewPrivateGroupMembers(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	ownerID := newUser(t, db)
+	outsiderID := newUser(t, db)
+
+	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("private-access"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	members, err := GetGroupMembers(ctx, db, outsiderID, groupID)
+	if !errors.Is(err, ErrPrivateGroupAccess) {
+		t.Fatalf("expected ErrPrivateGroupAccess, got %v", err)
+	}
+
+	if len(members) != 0 {
+		t.Fatal("outsider should not receive private member information")
+	}
+}
+
+// US9: a signed-in outsider can view a public group's members.
+func TestPublicGroupMembersAreVisible(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	ownerID := newUser(t, db)
+	outsiderID := newUser(t, db)
+
+	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("public-members"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	members, err := GetGroupMembers(ctx, db, outsiderID, groupID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(members) != 1 || members[0].UserID != ownerID || !members[0].IsOwner {
+		t.Fatal("expected the group's owner in the member list")
+	}
+}
+
+func TestGroupMembersAPI(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	ownerID := newUser(t, db)
+	outsiderID := newUser(t, db)
+
+	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("members-api"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalCurrentUser := currentUser
+	t.Cleanup(func() {
+		currentUser = originalCurrentUser
+	})
+
+	path := fmt.Sprintf("/groups/%d/members", groupID)
+	handler := routes(db)
+
+	// A signed-out user should receive 401.
+	currentUser = func(r *http.Request) (int64, error) {
+		return 0, errNotSignedIn
+	}
+
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", response.Code)
+	}
+
+	// A signed-in outsider should receive 403.
+	currentUser = func(r *http.Request) (int64, error) {
+		return outsiderID, nil
+	}
+
+	request = httptest.NewRequest(http.MethodGet, path, nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", response.Code)
+	}
+
+	// The owner should receive the member list.
+	currentUser = func(r *http.Request) (int64, error) {
+		return ownerID, nil
+	}
+
+	request = httptest.NewRequest(http.MethodGet, path, nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+
+	var members []GroupMember
+	err = json.Unmarshal(response.Body.Bytes(), &members)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(members) != 1 || members[0].UserID != ownerID || !members[0].IsOwner {
+		t.Fatal("expected the owner in the returned member list")
+	}
+}
+
+func TestPrivateGroupLeaderboardAPI(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	ownerID := newUser(t, db)
+	outsiderID := newUser(t, db)
+
+	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("private-board"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalCurrentUser := currentUser
+	t.Cleanup(func() {
+		currentUser = originalCurrentUser
+	})
+
+	path := fmt.Sprintf("/groups/%d/leaderboard", groupID)
+	handler := routes(db)
+
+	currentUser = func(r *http.Request) (int64, error) {
+		return outsiderID, nil
+	}
+
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", response.Code)
+	}
+
+	currentUser = func(r *http.Request) (int64, error) {
+		return ownerID, nil
+	}
+
+	request = httptest.NewRequest(http.MethodGet, path, nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
 	}
 }

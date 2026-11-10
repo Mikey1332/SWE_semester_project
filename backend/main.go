@@ -321,12 +321,39 @@ func routes(db *sql.DB) http.Handler {
 		serveLeaderboard(w, r, db, nil)
 	})
 	mux.HandleFunc("GET /groups/{id}/leaderboard", func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+
+		groupID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || groupID <= 0 {
 			http.Error(w, "invalid group id", http.StatusBadRequest)
 			return
 		}
-		serveLeaderboard(w, r, db, &id)
+
+		// Reuse the member-list access check.
+		_, err = GetGroupMembers(r.Context(), db, userID, groupID)
+
+		switch {
+		case errors.Is(err, ErrNoSuchGroup):
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		case errors.Is(err, ErrPrivateGroupAccess):
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		case err != nil:
+			log.Printf("group %d leaderboard access: %v", groupID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		serveLeaderboard(w, r, db, &groupID)
 	})
 	// Adds the signed-in user to a group. 204 on success.
 	mux.HandleFunc("POST /groups/{id}/join", func(w http.ResponseWriter, r *http.Request) {
@@ -497,6 +524,38 @@ func routes(db *sql.DB) http.Handler {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		default:
 			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("GET /groups/{id}/members", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+
+		groupID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || groupID <= 0 {
+			http.Error(w, "invalid group id", http.StatusBadRequest)
+			return
+		}
+
+		members, err := GetGroupMembers(r.Context(), db, userID, groupID)
+
+		switch {
+		case errors.Is(err, ErrNoSuchGroup):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, ErrPrivateGroupAccess):
+			http.Error(w, err.Error(), http.StatusForbidden)
+		case err != nil:
+			log.Printf("group %d members requested by user %d: %v", groupID, userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		default:
+			writeJSON(w, members)
 		}
 	})
 

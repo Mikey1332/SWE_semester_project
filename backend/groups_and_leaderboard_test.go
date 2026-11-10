@@ -20,7 +20,8 @@ func TestLeaveGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	groupID, err := CreateGroup(ctx, db, "Leave test "+unique)
+	ownerID := newUser(t, db)
+	groupID, _, err := CreateGroup(ctx, db, ownerID, "Leave test "+unique, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,13 +62,9 @@ func TestLeaveGroup(t *testing.T) {
 func TestT19T20GroupsAndGroupLeaderboard(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
-	group, err := CreateGroup(ctx, db, unique("group"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	member, outsider := newUser(t, db), newUser(t, db)
-
-	if err := JoinGroup(ctx, db, member, group); err != nil { // T19
+	group, _, err := CreateGroup(ctx, db, member, unique("group"), false)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := JoinGroup(ctx, db, member, group); !errors.Is(err, ErrAlreadyMember) {
@@ -95,18 +92,19 @@ func TestGroupCreateAndEveryMemberRanked(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
 	name := unique("friends")
-	group, err := CreateGroup(ctx, db, name)
+	trader, newcomer := newUser(t, db), newUser(t, db)
+
+	group, _, err := CreateGroup(ctx, db, trader, name, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CreateGroup(ctx, db, name); !errors.Is(err, ErrGroupNameTaken) {
+
+	if _, _, err := CreateGroup(ctx, db, trader, name, false); !errors.Is(err, ErrGroupNameTaken) {
 		t.Fatalf("duplicate name: got %v, want ErrGroupNameTaken", err)
 	}
-	trader, newcomer := newUser(t, db), newUser(t, db)
-	for _, id := range []int64{trader, newcomer} {
-		if err := JoinGroup(ctx, db, id, group); err != nil {
-			t.Fatal(err)
-		}
+
+	if err := JoinGroup(ctx, db, newcomer, group); err != nil {
+		t.Fatal(err)
 	}
 	earn(t, db, trader, resolvedMarket(t, db, 1), 250)
 

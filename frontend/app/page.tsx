@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import type { User } from "firebase/auth";
 import { AuthDialog, useOctaveUser } from "./auth-dialog";
@@ -9,6 +9,7 @@ import { auth } from "./firebase";
 import { readUnfinishedOrders, removeUnfinishedOrder, saveUnfinishedOrder, type UnfinishedOrder } from "./order-retry";
 import { MARKET_FILTERS, MARKET_SORTS, artworkColor, held, lastMove, marketQuestion, matchesFilter, monogram, parseQuantity, rankPath, sidePrice, sideLabel, sortMarkets, type Account, type LiveMarket, type MarketFilter, type MarketSort, type TradeAction, type TradeSide } from "./trading";
 import {Tutorial} from "./tutorial-dialog";
+import { ProfileView } from "./profile";
 type PendingOrder = {
     id: number;
     market_id: number;
@@ -20,14 +21,230 @@ type PendingOrder = {
     cancelled: boolean;
 };
 function Icon({ name, size = 20 }: {
-    name: "search" | "arrow" | "music" | "chart" | "clock" | "star";
+    name: "search" | "arrow" | "music" | "chart" | "clock" | "star" | "user";
     size?: number;
 }) {
-    const paths = { search: <><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></>, arrow: <><path d="M4 17 17 4M5 4h12v12"/></>, music: <><path d="M9 18V5l11-2v13M9 8l11-2"/><ellipse cx="5.5" cy="18" rx="3.5" ry="3"/><ellipse cx="16.5" cy="16" rx="3.5" ry="3"/></>, chart: <><path d="M4 4v16h17M7 14l4-5 4 3 6-7"/></>, clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></>, star: <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/> };
+    const paths = { search: <><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></>, arrow: <><path d="M4 17 17 4M5 4h12v12"/></>, music: <><path d="M9 18V5l11-2v13M9 8l11-2"/><ellipse cx="5.5" cy="18" rx="3.5" ry="3"/><ellipse cx="16.5" cy="16" rx="3.5" ry="3"/></>, chart: <><path d="M4 4v16h17M7 14l4-5 4 3 6-7"/></>, clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></>, star: <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/>, user: <><circle cx="12" cy="8" r="4"/><path d="M5 20c0-3.9 3.1-7 7-7s7 3.1 7 7"/></> };
     return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
 function Artwork({ market }: { market: LiveMarket }) {
-    return <div className={`artwork ${artworkColor(market.id)}`} aria-label={`${market.artist} illustrated record artwork`}><span className="art-lines"/><span className="art-monogram">{monogram(market.artist)}</span><span className="art-record"/><span className="art-name">{market.artist}</span></div>;
+    const [coverUrl, setCoverUrl] = useState("");
+
+    useEffect(() => {
+        let current = true;
+        setCoverUrl("");
+
+        async function loadCover() {
+            try {
+                const query = encodeURIComponent(market.title + " " + market.artist);
+                const url = "https://itunes.apple.com/search?term=" + query + "&entity=song&limit=1";
+                const response = await fetch(url);
+                if (!response.ok) {
+                    return;
+                }
+                const data = await response.json();
+                if (data.results && data.results.length > 0 && data.results[0].artworkUrl100) {
+                    const highRes = String(data.results[0].artworkUrl100).replace("100x100bb", "300x300bb");
+                    if (current) {
+                        setCoverUrl(highRes);
+                    }
+                }
+            } catch {
+                if (current) {
+                    setCoverUrl("");
+                }
+            }
+        }
+
+        loadCover();
+
+        return () => {
+            current = false;
+        };
+    }, [market.title, market.artist]);
+
+    return (
+        <div className={`artwork ${artworkColor(market.id)}`} aria-label={`${market.artist} album artwork`}>
+            {coverUrl !== "" && <img src={coverUrl} alt={market.title} className="art-cover" />}
+        </div>
+    );
+}
+
+type AppleSongInfo = {
+    albumName: string;
+    genre: string;
+    releaseDate: string;
+    previewUrl: string;
+    appleMusicUrl: string;
+};
+
+function formatTime(seconds: number) {
+    const wholeSeconds = Math.floor(seconds);
+    const mins = Math.floor(wholeSeconds / 60);
+    const secs = wholeSeconds % 60;
+    if (secs < 10) {
+        return mins + ":0" + secs;
+    }
+    return mins + ":" + secs;
+}
+
+function SongPreview({ market }: { market: LiveMarket }) {
+    const [songInfo, setSongInfo] = useState<AppleSongInfo | null>(null);
+    const [playing, setPlaying] = useState(false);
+    const [currentTime, setCurrentTime] = useState(0);
+    const [duration, setDuration] = useState(30);
+    const audioRef = useRef<HTMLAudioElement | null>(null);
+
+    useEffect(() => {
+        let current = true;
+        setSongInfo(null);
+        setPlaying(false);
+        setCurrentTime(0);
+        setDuration(30);
+
+        async function fetchSongInfo() {
+            try {
+                const query = encodeURIComponent(market.title + " " + market.artist);
+                const url = "https://itunes.apple.com/search?term=" + query + "&entity=song&limit=1";
+                const response = await fetch(url);
+                if (!response.ok) {
+                    return;
+                }
+                const data = await response.json();
+                if (data.results && data.results.length > 0) {
+                    const track = data.results[0];
+                    let formattedRelease = "";
+                    if (track.releaseDate) {
+                        const parsedDate = new Date(track.releaseDate);
+                        formattedRelease = parsedDate.toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                            year: "numeric",
+                        });
+                    }
+                    if (current) {
+                        setSongInfo({
+                            albumName: track.collectionName || "",
+                            genre: track.primaryGenreName || "",
+                            releaseDate: formattedRelease,
+                            previewUrl: track.previewUrl || "",
+                            appleMusicUrl: track.trackViewUrl || "",
+                        });
+                    }
+                }
+            } catch {
+                if (current) {
+                    setSongInfo(null);
+                }
+            }
+        }
+
+        fetchSongInfo();
+
+        return () => {
+            current = false;
+        };
+    }, [market.title, market.artist]);
+
+    if (!songInfo || songInfo.previewUrl === "") {
+        return null;
+    }
+
+    function togglePlay() {
+        const audio = audioRef.current;
+        if (!audio) {
+            return;
+        }
+        audio.muted = false;
+        audio.volume = 1;
+        if (audio.paused) {
+            audio.play().catch(() => {
+                setPlaying(false);
+            });
+        } else {
+            audio.pause();
+        }
+    }
+
+    let progressPercent = 0;
+    if (duration > 0) {
+        progressPercent = Math.min(100, (currentTime / duration) * 100);
+    }
+
+    return (
+        <div className="song-player-card">
+            <audio
+                ref={audioRef}
+                src={songInfo.previewUrl}
+                preload="auto"
+                onPlay={() => setPlaying(true)}
+                onPause={() => setPlaying(false)}
+                onTimeUpdate={() => {
+                    if (audioRef.current) {
+                        setCurrentTime(audioRef.current.currentTime);
+                    }
+                }}
+                onLoadedMetadata={() => {
+                    if (audioRef.current && audioRef.current.duration) {
+                        setDuration(audioRef.current.duration);
+                    }
+                }}
+                onEnded={() => {
+                    setPlaying(false);
+                    setCurrentTime(0);
+                }}
+            />
+
+            <div className="song-player-left">
+                <Artwork market={market} />
+                <div className="song-player-track">
+                    <strong>{market.title}</strong>
+                    <span>{market.artist}</span>
+                    <div className="song-meta-list">
+                        {songInfo.albumName !== "" && (
+                            <span className="song-meta-item"><b>Album:</b> {songInfo.albumName}</span>
+                        )}
+                        {songInfo.genre !== "" && (
+                            <span className="song-meta-item"><b>Genre:</b> {songInfo.genre}</span>
+                        )}
+                        {songInfo.releaseDate !== "" && (
+                            <span className="song-meta-item"><b>Released:</b> {songInfo.releaseDate}</span>
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            <div className="song-player-center">
+                <button
+                    type="button"
+                    className={playing ? "song-play-btn playing" : "song-play-btn"}
+                    onClick={togglePlay}
+                    aria-label={playing ? "Pause preview" : "Play preview"}
+                >
+                    {playing ? "❚❚" : "▶"}
+                </button>
+                <span className="song-time-label">{formatTime(currentTime)}</span>
+                <div className="song-progress-track">
+                    <div
+                        className="song-progress-fill"
+                        style={{ width: progressPercent + "%" }}
+                    />
+                </div>
+                <span className="song-time-label">{formatTime(duration)}</span>
+            </div>
+
+            {songInfo.appleMusicUrl !== "" && (
+                <a
+                    href={songInfo.appleMusicUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="apple-music-pill"
+                >
+                    ♫ Apple Music ↗
+                </a>
+            )}
+        </div>
+    );
 }
 function Sparkline({ market }: { market: LiveMarket }) {
     const move = lastMove(market);
@@ -77,6 +294,7 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
     const [groupsOpen, setGroupsOpen] = useState(false);
     const [orderMessage, setOrderMessage] = useState("");
     const [busy, setBusy] = useState(false);
+    const [profile, setProfile] = useState(false);
 
     const fetchMarkets = useCallback(async () => {
         const response = await fetch("/api/markets", { cache: "no-store" });
@@ -165,8 +383,8 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
     }, [fetchAccount]);
 
     const selected = markets?.find(m => m.id === selectedId) ?? null;
-    const goHome = () => { setSelectedId(null); setInfo(false); setWatchlist(false); setLedger(false); setGroupsOpen(false); setFilter("All markets"); };
-    const openMarket = (market: LiveMarket, choice: TradeSide = "yes") => { setInfo(false); setLedger(false); setGroupsOpen(false); setSelectedId(market.id); setSide(choice); setLimitPrice(String(sidePrice(market, choice))); setOrderMessage(""); };
+    const goHome = () => { setSelectedId(null); setInfo(false); setWatchlist(false); setLedger(false); setGroupsOpen(false); setProfile(false); setFilter("All markets"); };
+    const openMarket = (market: LiveMarket, choice: TradeSide = "yes") => { setInfo(false); setLedger(false); setGroupsOpen(false); setProfile(false); setSelectedId(market.id); setSide(choice); setLimitPrice(String(sidePrice(market, choice))); setOrderMessage(""); };
     const count = parseQuantity(quantity);
     const holding = selected ? held(account, selected.id, side) : 0;
     const price = Number(limitPrice);
@@ -310,8 +528,16 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
     const all = markets ?? [];
     const visible = sortMarkets(all.filter(m => `${m.title} ${m.artist}`.toLowerCase().includes(search.toLowerCase()) && (!watchlist || saved.includes(m.id)) && (filter === "Watchlist" ? saved.includes(m.id) : matchesFilter(m, filter))), sort);
     const chartDate = all[0]?.chart_date;
+    let displayUsername = "Profile";
+    if (user) {
+        if (user.displayName) {
+            displayUsername = user.displayName;
+        } else if (user.email) {
+            displayUsername = user.email.split("@")[0];
+        }
+    }
     return <div className="app-shell">
-    <header className="header"><button className="brand" onClick={goHome} aria-label="Octave home"><Image src="/octave-black.png" alt="Octave" width={2170} height={725} className="brand-logo" priority /></button><nav aria-label="Main navigation"><button className={!info && !watchlist && !ledger && !groupsOpen ? "nav-active" : ""} aria-current={!info && !watchlist && !ledger && !groupsOpen ? "page" : undefined} onClick={goHome}>Discover</button><button className={!info && !ledger && !groupsOpen && watchlist ? "nav-active" : ""} aria-current={!info && !ledger && !groupsOpen && watchlist ? "page" : undefined} onClick={() => { setSelectedId(null); setInfo(false); setLedger(false); setGroupsOpen(false); setWatchlist(true); setFilter("All markets"); setSearch(""); }}>Watchlist <span className="nav-count">{saved.length}</span></button><button className={ledger ? "nav-active" : ""} aria-current={ledger ? "page" : undefined} onClick={() => { setSelectedId(null); setInfo(false); setWatchlist(false); setGroupsOpen(false); setLedger(true); }}>My ledger</button><button className={groupsOpen ? "nav-active" : ""} aria-current={groupsOpen ? "page" : undefined} onClick={() => { setSelectedId(null); setInfo(false); setWatchlist(false); setLedger(false); setGroupsOpen(true); }}>Groups</button><button className={info ? "nav-active" : ""} aria-current={info ? "page" : undefined} onClick={() => { setLedger(false); setGroupsOpen(false); setInfo(true); }}>How it works</button></nav><div className="account-actions">{user ? <>{account && <span className="balance-chip" title="Music Note balance">♫ {account.balance.toLocaleString()}</span>}<span className="user-name">{user.displayName || user.email}</span><button className="login" onClick={() => void logout()}>Log out</button></> : <><button className="login" onClick={() => setAuthMode("login")}>Log in</button><button className="primary small" onClick={() => setAuthMode("signup")}>Get started <span>↗</span></button></>}</div></header>
+    <header className="header"><button className="brand" onClick={goHome} aria-label="Octave home"><Image src="/octave-black.png" alt="Octave" width={2170} height={725} className="brand-logo" priority /></button><nav aria-label="Main navigation"><button className={!info && !watchlist && !ledger && !groupsOpen && !profile ? "nav-active" : ""} aria-current={!info && !watchlist && !ledger && !groupsOpen && !profile ? "page" : undefined} onClick={goHome}>Discover</button><button className={!info && !ledger && !groupsOpen && !profile && watchlist ? "nav-active" : ""} aria-current={!info && !ledger && !groupsOpen && !profile && watchlist ? "page" : undefined} onClick={() => { setSelectedId(null); setInfo(false); setLedger(false); setGroupsOpen(false); setProfile(false); setWatchlist(true); setFilter("All markets"); setSearch(""); }}>Watchlist <span className="nav-count">{saved.length}</span></button><button className={groupsOpen ? "nav-active" : ""} aria-current={groupsOpen ? "page" : undefined} onClick={() => { setSelectedId(null); setInfo(false); setWatchlist(false); setLedger(false); setProfile(false); setGroupsOpen(true); }}>Groups</button></nav><div className="account-actions">{user ? <>{account && <span className="balance-chip" title="Music Note balance">♫ {account.balance.toLocaleString()}</span>}<button className={profile ? "profile-icon-button active" : "profile-icon-button"} aria-label="Profile" title={displayUsername} onClick={() => { setSelectedId(null); setInfo(false); setWatchlist(false); setLedger(false); setGroupsOpen(false); setProfile(true); }}><Icon name="user" size={18}/><span>{displayUsername}</span></button><button className="login" onClick={() => void logout()}>Log out</button></> : <><button className="login" onClick={() => setAuthMode("login")}>Log in</button><button className="primary small" onClick={() => setAuthMode("signup")}>Get started <span>↗</span></button></>}</div></header>
     <main>
       {user && unfinishedOrders.filter(order => order.user_id === user.uid).map(order => (
         <div key={order.request_id} role="status">
@@ -320,7 +546,7 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
         </div>
       ))}
       {!selected && orderMessage && <p role="status">{orderMessage}</p>}
-      {groupsOpen ? <GroupsView key={user?.uid ?? "signed-out"} user={user} onSignUp={() => setAuthMode("signup")}/> : ledger ? <LedgerView key={user?.uid ?? "signed-out"} user={user} onSignUp={() => setAuthMode("signup")}/> : info ? <section className="how-panel"><span className="eyebrow">A LITTLE MUSIC. A LITTLE INSTINCT.</span><h1>Your taste. Your edge.</h1><p>Predict what happens next on the Billboard Hot 100 using virtual Music Notes. Everyone starts with ♫ 10,000.</p><div className="how-steps"><article><b>01</b><h2>Find your track</h2><p>Every week a market opens for each song on the latest Hot 100, asking whether it will go up or down on the next chart.</p></article><article><b>02</b><h2>Make your call</h2><p>Buy UP or DOWN contracts. At #1, choose STAY or DOWN. Prices run from ♫ 1 to ♫ 99, and both sides together cost ♫ 100. Place a sell order before trading closes; it fills when a matching buyer is available.</p></article><article><b>03</b><h2>Follow the charts</h2><p>When the next chart is in, markets settle automatically: every winning contract pays ♫ 100. Unchanged ranks are refunded except at #1, where STAY wins. Track it all in My ledger.</p></article></div><button className="primary" onClick={() => setInfo(false)}>Explore the markets →</button></section> : selected ? <>
+      {profile ? <ProfileView key={user?.uid ?? "signed-out"} user={user} markets={markets} onSignUp={() => setAuthMode("signup")} onOpenMarket={(marketId, choice) => { const m = markets?.find(x => x.id === marketId); if (m) { openMarket(m, choice); } }} /> : groupsOpen ? <GroupsView key={user?.uid ?? "signed-out"} user={user} onSignUp={() => setAuthMode("signup")}/> : ledger ? <LedgerView key={user?.uid ?? "signed-out"} user={user} onSignUp={() => setAuthMode("signup")}/> : info ? <section className="how-panel"><span className="eyebrow">A LITTLE MUSIC. A LITTLE INSTINCT.</span><h1>Your taste. Your edge.</h1><p>Predict what happens next on the Billboard Hot 100 using virtual Music Notes. Everyone starts with ♫ 10,000.</p><div className="how-steps"><article><b>01</b><h2>Find your track</h2><p>Every week a market opens for each song on the latest Hot 100, asking whether it will go up or down on the next chart.</p></article><article><b>02</b><h2>Make your call</h2><p>Buy UP or DOWN contracts. At #1, choose STAY or DOWN. Prices run from ♫ 1 to ♫ 99, and both sides together cost ♫ 100. Place a sell order before trading closes; it fills when a matching buyer is available.</p></article><article><b>03</b><h2>Follow the charts</h2><p>When the next chart is in, markets settle automatically: every winning contract pays ♫ 100. Unchanged ranks are refunded except at #1, where STAY wins. Track it all in My ledger.</p></article></div><button className="primary" onClick={() => setInfo(false)}>Explore the markets →</button></section> : selected ? <>
       <button className="back-link" onClick={() => setSelectedId(null)}>← All markets</button>
       <div className="detail-heading">
         <Artwork market={selected}/>
@@ -328,6 +554,9 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
           <h1>{marketQuestion(selected)}</h1>
           <p>{selected.artist} <span className="dot-separator">·</span> Closes {closesLong(selected)}</p>
         </div>
+      </div>
+      <div className="detail-layout"><section className="chart-panel"><div className="chart-top"><div><span className="muted">{sideLabel(selected.baseline_rank, "yes")} estimate</span><strong>{selected.yes_price}% <small><Move market={selected}/></small></strong></div><span className="sample-badge">Hot 100 rank</span></div><div className="probability-chart"><div className="chart-grid"><span>#1</span><span>#25</span><span>#50</span><span>#75</span><span>#100</span></div><svg viewBox="0 0 700 240" preserveAspectRatio="none" role="img" aria-label={`${selected.title}'s Hot 100 rank over the last ${Math.max(selected.history.length, 1)} weeks, now #${selected.baseline_rank}`}><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop stopColor="#8e7bbc" stopOpacity=".24"/><stop offset="1" stopColor="#8e7bbc" stopOpacity="0"/></linearGradient></defs>{(() => { const line = rankPath(selected.history.length ? selected.history.map(h => h.rank) : [selected.baseline_rank], 700, 240, 0); return <><path d={`${line} V240 H0Z`} fill="url(#chartFill)"/><path d={line} stroke="#8c72b4" strokeWidth="3" fill="none" vectorEffect="non-scaling-stroke"/></>; })()}</svg></div><div className="chart-dates">{(selected.history.length ? selected.history : [{ chart_date: selected.chart_date, rank: selected.baseline_rank }]).map(h => <span key={h.chart_date}>{shortDate(h.chart_date)}</span>)}</div><div className="chart-bottom"><span>♫ {selected.volume.toLocaleString()} contracts traded</span><span>Settles on the {shortDate(selected.chart_date)} chart</span></div><SongPreview market={selected}/><div className="market-rules"><p>Winning contracts pay ♫ 100. Trading closes {closesLong(selected)}.</p></div></section>
+      <aside className="order-panel">
         <div className="chart-source">
           <Image src="/billboard-logo.svg" alt="Billboard Hot 100" width={150} height={32} className="billboard-logo"/>
           <div className="chart-rank">
@@ -335,20 +564,9 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
             <strong>#{selected.baseline_rank}</strong>
           </div>
         </div>
-      </div>
-      <div className="detail-layout"><section className="chart-panel"><div className="chart-top"><div><span className="muted">{sideLabel(selected.baseline_rank, "yes")} estimate</span><strong>{selected.yes_price}% <small><Move market={selected}/></small></strong></div><span className="sample-badge">Hot 100 rank</span></div><div className="probability-chart"><div className="chart-grid"><span>#1</span><span>#25</span><span>#50</span><span>#75</span><span>#100</span></div><svg viewBox="0 0 700 240" preserveAspectRatio="none" role="img" aria-label={`${selected.title}'s Hot 100 rank over the last ${Math.max(selected.history.length, 1)} weeks, now #${selected.baseline_rank}`}><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop stopColor="#8e7bbc" stopOpacity=".24"/><stop offset="1" stopColor="#8e7bbc" stopOpacity="0"/></linearGradient></defs>{(() => { const line = rankPath(selected.history.length ? selected.history.map(h => h.rank) : [selected.baseline_rank], 700, 240, 0); return <><path d={`${line} V240 H0Z`} fill="url(#chartFill)"/><path d={line} stroke="#8c72b4" strokeWidth="3" fill="none" vectorEffect="non-scaling-stroke"/></>; })()}</svg></div><div className="chart-dates">{(selected.history.length ? selected.history : [{ chart_date: selected.chart_date, rank: selected.baseline_rank }]).map(h => <span key={h.chart_date}>{shortDate(h.chart_date)}</span>)}</div><div className="chart-bottom"><span>♫ {selected.volume.toLocaleString()} contracts traded</span><span>Settles on the {shortDate(selected.chart_date)} chart</span></div><div className="market-rules"><p>Winning contracts pay ♫ 100. Trading closes {closesLong(selected)}.</p></div></section>
-      <aside className="order-panel">
         <div className="order-heading">
           <h2>Make your call</h2>
           <span>{account ? `♫ ${account.balance.toLocaleString()}` : "♫ Music Notes"}</span>
-        </div>
-
-        <div className="order-song">
-          <Artwork market={selected}/>
-          <div>
-            <strong>{selected.title}</strong>
-            <p>{selected.artist}</p>
-          </div>
         </div>
 
         <div className="side-picker">

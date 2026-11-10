@@ -386,3 +386,50 @@ func TransferGroupOwnership(ctx context.Context, db *sql.DB, userID, groupID, ne
 
 	return tx.Commit()
 }
+
+func DeleteGroup(ctx context.Context, db *sql.DB, userID, groupID int64) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Lock the group while checking ownership and deleting it.
+	var ownerID sql.NullInt64
+
+	query := "SELECT owner_id FROM user_groups WHERE id = $1 FOR UPDATE"
+	err = tx.QueryRowContext(ctx, query, groupID).Scan(&ownerID)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNoSuchGroup
+	}
+	if err != nil {
+		return err
+	}
+
+	if !ownerID.Valid || ownerID.Int64 != userID {
+		return ErrNotGroupOwner
+	}
+
+	// Remove memberships before deleting the group.
+	query = "DELETE FROM group_members WHERE group_id = $1"
+	_, err = tx.ExecContext(ctx, query, groupID)
+	if err != nil {
+		return err
+	}
+
+	// Remove the group's invitation codes.
+	query = "DELETE FROM group_invites WHERE group_id = $1"
+	_, err = tx.ExecContext(ctx, query, groupID)
+	if err != nil {
+		return err
+	}
+
+	query = "DELETE FROM user_groups WHERE id = $1"
+	_, err = tx.ExecContext(ctx, query, groupID)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}

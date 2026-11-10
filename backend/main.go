@@ -604,6 +604,38 @@ func routes(db *sql.DB) http.Handler {
 		}
 	})
 
+	mux.HandleFunc("DELETE /groups/{id}", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := signedIn(w, r)
+		if !ok {
+			return
+		}
+
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+
+		groupID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || groupID <= 0 {
+			http.Error(w, "invalid group id", http.StatusBadRequest)
+			return
+		}
+
+		err = DeleteGroup(r.Context(), db, userID, groupID)
+
+		switch {
+		case errors.Is(err, ErrNoSuchGroup):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, ErrNotGroupOwner):
+			http.Error(w, err.Error(), http.StatusForbidden)
+		case err != nil:
+			log.Printf("delete group %d by user %d: %v", groupID, userID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
 	return mux
 }
 

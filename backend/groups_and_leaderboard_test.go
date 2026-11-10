@@ -950,3 +950,188 @@ func TestTransferGroupOwnershipAPI(t *testing.T) {
 		t.Fatal("successful request should change ownership")
 	}
 }
+
+// US9: the owner can delete a group, including its memberships and invites.
+func TestOwnerCanDeleteGroup(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	ownerID := newUser(t, db)
+	memberID := newUser(t, db)
+
+	groupID, code, err := CreateGroup(ctx, db, ownerID, unique("delete"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = JoinGroup(ctx, db, memberID, groupID, code)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = DeleteGroup(ctx, db, ownerID, groupID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var groups, members, invites int
+	err = db.QueryRowContext(ctx,
+		"SELECT (SELECT COUNT(*) FROM user_groups WHERE id = $1), (SELECT COUNT(*) FROM group_members WHERE group_id = $1), (SELECT COUNT(*) FROM group_invites WHERE group_id = $1)",
+		groupID,
+	).Scan(&groups, &members, &invites)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if groups != 0 || members != 0 || invites != 0 {
+		t.Fatal("group, memberships, and invites should all be deleted")
+	}
+
+	// Deleting the group must not delete its users.
+	var users int
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM users WHERE id IN ($1, $2)",
+		ownerID, memberID,
+	).Scan(&users)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if users != 2 {
+		t.Fatal("deleting a group should preserve its users")
+	}
+
+	err = DeleteGroup(ctx, db, ownerID, groupID)
+	if !errors.Is(err, ErrNoSuchGroup) {
+		t.Fatalf("expected ErrNoSuchGroup, got %v", err)
+	}
+}
+
+// US9: a regular member cannot delete a group.
+func TestMemberCannotDeleteGroup(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	ownerID := newUser(t, db)
+	memberID := newUser(t, db)
+
+	groupID, code, err := CreateGroup(ctx, db, ownerID, unique("delete-denied"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = JoinGroup(ctx, db, memberID, groupID, code)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = DeleteGroup(ctx, db, memberID, groupID)
+	if !errors.Is(err, ErrNotGroupOwner) {
+		t.Fatalf("expected ErrNotGroupOwner, got %v", err)
+	}
+
+	// The rejected deletion must preserve the group and its related data.
+	var groups, members, invites int
+	err = db.QueryRowContext(ctx,
+		"SELECT (SELECT COUNT(*) FROM user_groups WHERE id = $1), (SELECT COUNT(*) FROM group_members WHERE group_id = $1), (SELECT COUNT(*) FROM group_invites WHERE group_id = $1)",
+		groupID,
+	).Scan(&groups, &members, &invites)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if groups != 1 || members != 2 || invites != 1 {
+		t.Fatal("rejected deletion should preserve the group, members, and invite")
+	}
+}
+
+func TestDeleteGroupAPI(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	ownerID := newUser(t, db)
+	memberID := newUser(t, db)
+
+	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("delete-api"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = JoinGroup(ctx, db, memberID, groupID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalCurrentUser := currentUser
+	t.Cleanup(func() {
+		currentUser = originalCurrentUser
+	})
+
+	path := fmt.Sprintf("/groups/%d", groupID)
+	handler := routes(db)
+
+	// A signed-out user cannot delete the group.
+	currentUser = func(r *http.Request) (int64, error) {
+		return 0, errNotSignedIn
+	}
+
+	request := httptest.NewRequest(http.MethodDelete, path, nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", response.Code)
+	}
+
+	// A regular member cannot delete the group.
+	currentUser = func(r *http.Request) (int64, error) {
+		return memberID, nil
+	}
+
+	request = httptest.NewRequest(http.MethodDelete, path, nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", response.Code)
+	}
+
+	// Rejected requests must leave the group intact.
+	var count int
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM user_groups WHERE id = $1",
+		groupID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != 1 {
+		t.Fatal("rejected requests should not delete the group")
+	}
+
+	// The owner can delete the group.
+	currentUser = func(r *http.Request) (int64, error) {
+		return ownerID, nil
+	}
+
+	request = httptest.NewRequest(http.MethodDelete, path, nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", response.Code, response.Body.String())
+	}
+
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM user_groups WHERE id = $1",
+		groupID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != 0 {
+		t.Fatal("owner's request should delete the group")
+	}
+}

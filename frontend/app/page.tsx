@@ -7,6 +7,7 @@ import { LedgerView } from "./ledger";
 import { GroupsView } from "./groups";
 import { auth } from "./firebase";
 import { readUnfinishedOrders, removeUnfinishedOrder, saveUnfinishedOrder, type UnfinishedOrder } from "./order-retry";
+import OrderBook from "./order-book";
 import { MARKET_FILTERS, MARKET_SORTS, artworkColor, held, lastMove, marketQuestion, matchesFilter, parseQuantity, rankPath, sidePrice, sideLabel, sortMarkets, type Account, type LiveMarket, type MarketFilter, type MarketSort, type TradeAction, type TradeSide } from "./trading";
 import {Tutorial} from "./tutorial-dialog";
 import { ProfileView } from "./profile";
@@ -294,6 +295,7 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
     const [saved, setSaved] = useState<number[]>([]);
     const [quantity, setQuantity] = useState("10");
     const [limitPrice, setLimitPrice] = useState("50");
+    const [bookRevision, setBookRevision] = useState(0);
     const [orders, setOrders] = useState<PendingOrder[]>([]);
     const [unfinishedOrders, setUnfinishedOrders] = useState<UnfinishedOrder[]>([]);
     const [info, setInfo] = useState(false);
@@ -399,6 +401,13 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
     const selected = markets?.find(m => m.id === selectedId) ?? null;
     const goHome = () => { setSelectedId(null); setInfo(false); setWatchlist(false); setLedger(false); setGroupsOpen(false); setProfile(false); setFilter("All markets"); };
     const openMarket = (market: LiveMarket, choice: TradeSide = "yes") => { setInfo(false); setLedger(false); setGroupsOpen(false); setProfile(false); setSelectedId(market.id); setSide(choice); setLimitPrice(String(sidePrice(market, choice))); setOrderMessage(""); };
+    function selectSide(choice: TradeSide) {
+        if (!selected) return;
+        setSide(choice);
+        setLimitPrice(String(sidePrice(selected, choice)));
+        setOrderMessage("");
+    }
+
     const count = parseQuantity(quantity);
     const holding = selected ? held(account, selected.id, side) : 0;
     const price = Number(limitPrice);
@@ -460,6 +469,7 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
             removeUnfinishedOrder(localStorage, order);
             if (auth.currentUser?.uid !== user.uid) return;
             setUnfinishedOrders(readUnfinishedOrders(localStorage, user.uid));
+            setBookRevision(revision => revision + 1);
             const filled = result.quantity - result.remaining;
             let message = `Order accepted. ${filled} filled; ${result.remaining} remaining.`;
             if (result.cancelled) {
@@ -498,6 +508,7 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
             if (auth.currentUser?.uid !== user.uid) return;
             setAccount(account);
             setOrders(orders);
+            setBookRevision(revision => revision + 1);
             setOrderMessage("Orders updated.");
         } catch (error) {
             if (auth.currentUser?.uid === user.uid) {
@@ -518,6 +529,7 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
             });
             if (!response.ok) throw new Error(await errorText(response));
             if (auth.currentUser?.uid !== user.uid) return;
+            setBookRevision(revision => revision + 1);
             setOrderMessage("Order cancelled.");
             try {
                 const orders = await fetchOrders();
@@ -569,7 +581,9 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
           <p>{selected.artist} <span className="dot-separator">·</span> Closes {closesLong(selected)}</p>
         </div>
       </div>
-      <div className="detail-layout"><section className="chart-panel"><div className="chart-top"><div><span className="muted">{sideLabel(selected.baseline_rank, "yes")} estimate</span><strong>{selected.yes_price}% <small><Move market={selected}/></small></strong></div><span className="sample-badge">Hot 100 rank</span></div><div className="probability-chart"><div className="chart-grid"><span>#1</span><span>#25</span><span>#50</span><span>#75</span><span>#100</span></div><svg viewBox="0 0 700 240" preserveAspectRatio="none" role="img" aria-label={`${selected.title}'s Hot 100 rank over the last ${Math.max(selected.history.length, 1)} weeks, now #${selected.baseline_rank}`}><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop stopColor="#8e7bbc" stopOpacity=".24"/><stop offset="1" stopColor="#8e7bbc" stopOpacity="0"/></linearGradient></defs>{(() => { const line = rankPath(selected.history.length ? selected.history.map(h => h.rank) : [selected.baseline_rank], 700, 240, 0); return <><path d={`${line} V240 H0Z`} fill="url(#chartFill)"/><path d={line} stroke="#8c72b4" strokeWidth="3" fill="none" vectorEffect="non-scaling-stroke"/></>; })()}</svg></div><div className="chart-dates">{(selected.history.length ? selected.history : [{ chart_date: selected.chart_date, rank: selected.baseline_rank }]).map(h => <span key={h.chart_date}>{shortDate(h.chart_date)}</span>)}</div><div className="chart-bottom"><span>♫ {selected.volume.toLocaleString()} contracts traded</span><span>Settles on the {shortDate(selected.chart_date)} chart</span></div><SongPreview key={selected.id} market={selected}/><div className="market-rules"><p>Winning contracts pay ♫ 100. Trading closes {closesLong(selected)}.</p></div></section>
+      <div className="detail-layout"><section className="chart-panel"><div className="chart-top"><div><span className="muted">{sideLabel(selected.baseline_rank, "yes")} estimate</span><strong>{selected.yes_price}% <small><Move market={selected}/></small></strong></div><span className="sample-badge">Hot 100 rank</span></div><div className="probability-chart"><div className="chart-grid"><span>#1</span><span>#25</span><span>#50</span><span>#75</span><span>#100</span></div><svg viewBox="0 0 700 240" preserveAspectRatio="none" role="img" aria-label={`${selected.title}'s Hot 100 rank over the last ${Math.max(selected.history.length, 1)} weeks, now #${selected.baseline_rank}`}><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop stopColor="#8e7bbc" stopOpacity=".24"/><stop offset="1" stopColor="#8e7bbc" stopOpacity="0"/></linearGradient></defs>{(() => { const line = rankPath(selected.history.length ? selected.history.map(h => h.rank) : [selected.baseline_rank], 700, 240, 0); return <><path d={`${line} V240 H0Z`} fill="url(#chartFill)"/><path d={line} stroke="#8c72b4" strokeWidth="3" fill="none" vectorEffect="non-scaling-stroke"/></>; })()}</svg></div><div className="chart-dates">{(selected.history.length ? selected.history : [{ chart_date: selected.chart_date, rank: selected.baseline_rank }]).map(h => <span key={h.chart_date}>{shortDate(h.chart_date)}</span>)}</div><div className="chart-bottom"><span>♫ {selected.volume.toLocaleString()} contracts traded</span><span>Settles on the {shortDate(selected.chart_date)} chart</span></div><OrderBook key={selected.id} market={selected} side={side} refresh={bookRevision}
+          onSide={selectSide} onPrice={price => setLimitPrice(String(price))}/>
+        <SongPreview key={selected.id} market={selected}/><div className="market-rules"><p>Winning contracts pay ♫ 100. Trading closes {closesLong(selected)}.</p></div></section>
       <aside className="order-panel">
         <div className="chart-source">
           <Image src="/billboard-logo.svg" alt="Billboard Hot 100" width={150} height={32} className="billboard-logo"/>
@@ -586,21 +600,15 @@ function TradingPage({ user, logout }: { user: User | null; logout: () => Promis
         <div className="side-picker">
           <button
             className={side === "yes" ? "up chosen" : "up"}
-            onClick={() => {
-              setSide("yes");
-              setLimitPrice(String(selected.yes_price));
-              setOrderMessage("");
-            }}
+            aria-pressed={side === "yes"}
+            onClick={() => selectSide("yes")}
           >
             {sideLabel(selected.baseline_rank, "yes")} <b>♫ {selected.yes_price}</b>
           </button>
           <button
             className={side === "no" ? "down chosen" : "down"}
-            onClick={() => {
-              setSide("no");
-              setLimitPrice(String(selected.no_price));
-              setOrderMessage("");
-            }}
+            aria-pressed={side === "no"}
+            onClick={() => selectSide("no")}
           >
             DOWN <b>♫ {selected.no_price}</b>
           </button>

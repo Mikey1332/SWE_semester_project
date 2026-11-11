@@ -180,6 +180,10 @@ func routes(db *sql.DB) http.Handler {
 		writeJSON(w, markets)
 	})
 
+	mux.HandleFunc("GET /markets/{id}/orderbook", func(w http.ResponseWriter, r *http.Request) {
+		orderBookHandler(w, r, db)
+	})
+
 	// Returns the signed-in user's ledger account and open contracts. The first
 	// call creates the account with the starting balance.
 	mux.HandleFunc("GET /auth/me", func(w http.ResponseWriter, r *http.Request) {

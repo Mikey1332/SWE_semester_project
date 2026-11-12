@@ -94,7 +94,6 @@ function Modal({ title, onClose, children }: {
 }) {
     const modalRef = useRef<HTMLDivElement>(null);
 
-    // Keep the latest close callback without restarting the focus effect.
     useEffect(() => {
         const previousFocus = document.activeElement;
         const root = modalRef.current;
@@ -579,7 +578,7 @@ function GroupDetail({ user, group, invite, run, initialSettings, onBack }: {
     </div>;
 }
 
-// Keep account-specific state isolated when the signed-in user changes.
+// Keeps account-specific state isolated when the signed-in user changes.
 export function GroupsView({ user, onSignUp }: {
     user: User | null; onSignUp: () => void;
 }) {
@@ -689,7 +688,7 @@ function SignedInGroups({ user }: { user: User }) {
         const code = result.invite_code;
         if (code) setCodes(current => ({ ...current, [result.id]: code }));
 
-        // Return the invite even if refreshing the list fails.
+        // Returns invite
         try {
             await refresh();
         } catch {

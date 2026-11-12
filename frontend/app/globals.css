@@ -1707,7 +1707,7 @@ footer {
 
 
 
-/* Keep the original music-note wordmark at its natural proportions. */
+/* Keeps original music-note wordmark at its natural proportions. */
 .brand-logo {
   width:110px;
   height:auto;
@@ -2197,4 +2197,104 @@ footer {
   .profile-stats {
     grid-template-columns: 1fr;
   }
+}
+
+.market-book {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.market-book-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.market-book-heading h2 {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.market-book-heading .side-picker {
+  gap: 5px;
+  margin: 0;
+}
+
+.market-book-heading .side-picker button {
+  padding: 5px 9px;
+  font-weight: 700;
+}
+
+.market-book table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.market-book th,
+.market-book td {
+  padding: 6px clamp(3px, 1vw, 9px);
+  text-align: right;
+}
+
+.market-book th:first-child {
+  text-align: left;
+}
+
+.market-book thead {
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+
+.market-book-asks {
+  --book-ink: #905751;
+  --book-depth: #f3e7e3;
+}
+
+.market-book-bids {
+  --book-ink: #38664e;
+  --book-depth: #e4f0e8;
+}
+
+.market-book-asks tr,
+.market-book-bids tr {
+  background-image: linear-gradient(var(--book-depth), var(--book-depth));
+  background-repeat: no-repeat;
+}
+
+.market-book tbody th,
+.market-book tbody button {
+  color: var(--book-ink);
+  font-weight: 700;
+}
+
+.market-book td button {
+  border-radius: 4px;
+  padding: 3px 4px;
+  white-space: nowrap;
+}
+
+.market-book td button:hover,
+.market-book td button:focus-visible {
+  text-decoration: underline;
+  background: white;
+}
+
+.market-book-last {
+  border-block: 1px solid var(--line);
+}
+
+.market-book-last td {
+  text-align: center;
+  font-weight: 600;
+}
+
+.market-book-status {
+  padding: 12px 0;
+  color: var(--muted);
 }

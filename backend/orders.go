@@ -235,10 +235,7 @@ func PlaceOrder(ctx context.Context, db *sql.DB, order Order) (Order, error) {
 			quantity = match.Remaining
 		}
 
-		price := match.Price
-		if match.Side != order.Side {
-			price = 100 - match.Price
-		}
+		_, price := match.quoteForSide(order.Side)
 
 		err = fillOrder(ctx, tx, match, quantity, match.Price)
 		if err != nil {

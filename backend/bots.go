@@ -12,7 +12,6 @@ import (
 // closeDaysBefore is how many days before a chart's date trading stops.
 // Billboard publishes the chart dated Saturday D on Tuesday D-4, so markets
 // close at midnight New York time on Monday D-5, before the answer is public.
-// ponytail: calibration knob; move it if Billboard's release day shifts.
 const closeDaysBefore = 5
 
 const botInterval = 15 * time.Minute

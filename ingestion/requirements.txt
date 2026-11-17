@@ -1,2 +1,4 @@
 psycopg[binary]
 schedule
+beautifulsoup4
+requests

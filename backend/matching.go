@@ -5,6 +5,17 @@ import (
 	"database/sql"
 )
 
+// quoteForSide expresses a resting order as a bid or ask for the requested outcome.
+func (order Order) quoteForSide(side string) (action string, price int64) {
+	if order.Side == side {
+		return order.Action, order.Price
+	}
+	if order.Action == "buy" {
+		return "sell", ContractPayout - order.Price
+	}
+	return "buy", ContractPayout - order.Price
+}
+
 func findMatchingOrder(ctx context.Context, tx *sql.Tx, order Order) (Order, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, user_id, market_id, request_id,
@@ -36,17 +47,9 @@ func findMatchingOrder(ctx context.Context, tx *sql.Tx, order Order) (Order, err
 			return Order{}, err
 		}
 
-		price := otherOrder.Price
-
-		if otherOrder.Side == order.Side {
-			if otherOrder.Action == order.Action {
-				continue
-			}
-		} else {
-			if otherOrder.Action != order.Action {
-				continue
-			}
-			price = 100 - otherOrder.Price
+		action, price := otherOrder.quoteForSide(order.Side)
+		if action == order.Action {
+			continue
 		}
 
 		if order.Action == "buy" && price > order.Price {

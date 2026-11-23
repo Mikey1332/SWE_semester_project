@@ -32,7 +32,6 @@ def run_ingestion():
             failed.append(chart_name)
             continue
 
-        print(chart_name + " snapshot saved for:", saved_date)
         logger.info("%s snapshot saved for: %s", chart_name, saved_date)
 
     if failed:

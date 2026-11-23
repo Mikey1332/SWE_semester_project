@@ -9,19 +9,16 @@ logger = logging.getLogger(__name__)
 
 def update_charts():
     logger.info("Updating chart data...")
-    print("Updating chart data...")
 
     try:
         run_ingestion()
     except Exception as error:
-        print("Chart update failed:", error)
         logger.exception("Chart update failed")
 
 
 def main():
     setup_logging()
-    print("[SCHEDULER RUNNING]\n")
-    logger.info("Scheduler running")
+    logger.info("[SCHEDULER RUNNING]")
 
     # Run once when the scheduler starts.
     update_charts()
@@ -36,8 +33,7 @@ def main():
             # Wait 30 secs before checking again
             time.sleep(30)
     except KeyboardInterrupt:
-        print("\n[SCHEDULER STOPPED]")
-        logger.info("Scheduler stopped")
+        logger.info("[SCHEDULER STOPPED]")
 
 
 if __name__ == "__main__":

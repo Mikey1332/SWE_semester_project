@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log"
+	"strings"
 	"testing"
 	"time"
 )
@@ -128,5 +131,20 @@ func TestSuggestPriceBounds(t *testing.T) {
 	_, price := suggest(falling)
 	if price < 1 || price > 99 {
 		t.Fatalf("price %d is outside 1 to 99", price)
+	}
+}
+
+func TestRunBotTickRecoversAndLogsPanic(t *testing.T) {
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	runBotTick(context.Background(), nil)
+
+	output := logs.String()
+	if !strings.Contains(output, "bots: panic:") ||
+		!strings.Contains(output, "runtime/debug.Stack") {
+		t.Fatalf("expected a bot panic log with a stack trace, got:\n%s", output)
 	}
 }

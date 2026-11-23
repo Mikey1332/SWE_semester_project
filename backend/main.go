@@ -722,7 +722,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              ":8080",
-		Handler:           routes(db),
+		Handler:           withFailureLogging(routes(db)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

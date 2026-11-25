@@ -38,7 +38,9 @@ export function AuthDialog({ mode, onClose }: {
                     await updateProfile(result.user, { displayName: username });
                     await result.user.reload();
                 }
-                const idToken = await result.user.getIdToken();
+                // Signup updates displayName after Firebase issues its initial
+                // token. Refresh it so the backend receives the profile name.
+                const idToken = await result.user.getIdToken(true);
                 const response = await fetch("/api/auth/me", { headers: { Authorization: `Bearer ${idToken}` } });
                 if (!response.ok)
                     throw new Error(`Firebase signed you in, but backend verification failed (${response.status}).`);

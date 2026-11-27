@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"context"
 	"database/sql"
 	"embed"
@@ -124,13 +125,13 @@ func Post(ctx context.Context, tx *sql.Tx, e Entry) (int64, error) {
 func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
 	_, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(3031)`)
 	if err != nil {
-		return err
+		return fmt.Errorf("take settlement lock: %w", err)
 	}
 
 	var songID, baseline, shift int64
@@ -139,7 +140,7 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 		`SELECT song_id, chart_date::text, baseline_rank, shift, status
 		 FROM markets WHERE id = $1 FOR UPDATE`, marketID).Scan(&songID, &chartDate, &baseline, &shift, &status)
 	if err != nil {
-		return err
+		return fmt.Errorf("load market: %w", err)
 	}
 	if status == "resolved" {
 		return nil
@@ -148,7 +149,7 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 	var loaded int
 	if err := tx.QueryRowContext(ctx,
 		`SELECT count(*) FROM chart_snapshots WHERE chart = 'hot-100' AND chart_date = $1`, chartDate).Scan(&loaded); err != nil {
-		return err
+		return fmt.Errorf("count chart rows for %s: %w", chartDate, err)
 	}
 	if loaded < ChartSize {
 		return ErrChartNotIn
@@ -160,7 +161,7 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 	if errors.Is(err, sql.ErrNoRows) {
 		rank = ChartSize + 1 // dropped off the chart
 	} else if err != nil {
-		return err
+		return fmt.Errorf("load song rank: %w", err)
 	}
 
 	outcome := "refund"
@@ -185,14 +186,14 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
         ORDER BY user_id, side
     `, marketID, outcome)
 	if err != nil {
-		return err
+		return fmt.Errorf("load positions: %w", err)
 	}
 	for rows.Next() {
 		var holder payment
 		err = rows.Scan(&holder.userID, &holder.side, &holder.quantity, &holder.remainingCost)
 		if err != nil {
 			rows.Close()
-			return err
+			return fmt.Errorf("read positions: %w", rows.Err())
 		}
 		payments = append(payments, holder)
 	}
@@ -216,22 +217,25 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 			entry.Price = 0
 		}
 		if _, err := Post(ctx, tx, entry); err != nil {
-			return err
+			return fmt.Errorf("pay user %d: %w", holder.userID, err)
 		}
 	}
 
 	_, err = tx.ExecContext(ctx, `UPDATE orders SET cancelled = true WHERE market_id = $1 AND remaining > 0`, marketID)
 	if err != nil {
-		return err
+		return fmt.Errorf("cancel open orders: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM positions WHERE market_id = $1`, marketID); err != nil {
-		return err
+		return fmt.Errorf("close positions: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE markets SET status = 'resolved', outcome = $2 WHERE id = $1`, marketID, outcome); err != nil {
-		return err
+		return fmt.Errorf("mark market resolved: %w", err)
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
 }
 
 // UserForFirebase returns the ledger user for a Firebase account, creating it

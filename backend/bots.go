@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"time"
 )
 
@@ -102,14 +103,24 @@ func CreateMarkets(ctx context.Context, db *sql.DB, chartDate string) (int, erro
 // RunBots calls botTick every botInterval until ctx is cancelled.
 func RunBots(ctx context.Context, db *sql.DB) {
 	for {
-		if err := botTick(ctx, db); err != nil {
-			log.Printf("bots: %v", err)
-		}
+		runBotTick(ctx, db)
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(botInterval):
 		}
+	}
+}
+
+// runBotTick runs one tick and logs any failure. So one bad tick never stops bots or takes server down.
+func runBotTick(ctx context.Context, db *sql.DB) {
+	defer func() {
+		if p := recover(); p != nil {
+			log.Printf("bots: panic: %v\n%s", p, debug.Stack())
+		}
+	}()
+	if err := botTick(ctx, db); err != nil {
+		log.Printf("bots: %v", err)
 	}
 }
 
@@ -140,7 +151,7 @@ func botTick(ctx context.Context, db *sql.DB) error {
 	var errs []error
 	for _, id := range due { // one bad market must not stop the rest from paying out
 		if err := Resolve(ctx, db, id); err != nil {
-			errs = append(errs, fmt.Errorf("resolve market %d: %w", id, err))
+			errs = append(errs, fmt.Errorf("settlement failed: resolve market %d: %w", id, err))
 		}
 	}
 	if len(due) > 0 {

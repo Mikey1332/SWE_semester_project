@@ -115,6 +115,19 @@ func serveLeaderboard(w http.ResponseWriter, r *http.Request, db *sql.DB, groupI
 
 func routes(db *sql.DB) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /leaderboard/profiles", func(w http.ResponseWriter, r *http.Request) {
+		if db == nil {
+			http.Error(w, errNoDatabase.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		board, err := ProfileLeaderboard(r.Context(), db)
+		if err != nil {
+			log.Printf("profile leaderboard: %v", err)
+			http.Error(w, "Could not load leaderboard.", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, board)
+	})
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

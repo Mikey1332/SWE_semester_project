@@ -20,6 +20,40 @@ type LeaderboardRow struct {
 	PnL    int64  `json:"pnl"`
 }
 
+// ProfileLeaderboard uses the same realized + unrealized P&L as GetProfile.
+// Query every profile on each request so new users need no enrollment or backfill.
+// A stable ID tie-breaker keeps equal P&L rankings consistent.
+func ProfileLeaderboard(ctx context.Context, db *sql.DB) ([]LeaderboardRow, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT u.id,
+		       COALESCE(NULLIF(BTRIM(u.username), ''), NULLIF(split_part(u.email, '@', 1), ''), 'Player'),
+		       pnl.realized_pnl + COALESCE(pos.unrealized_pnl, 0) AS total_pnl
+		FROM users u
+		JOIN user_pnl pnl ON pnl.user_id = u.id
+		LEFT JOIN (
+			SELECT p.user_id, SUM(p.quantity::bigint * CASE WHEN p.side = 'yes'
+			       THEN m.yes_price ELSE 100 - m.yes_price END - p.cost_basis) AS unrealized_pnl
+			FROM positions p JOIN markets m ON m.id = p.market_id
+			GROUP BY p.user_id
+		) pos ON pos.user_id = u.id
+		ORDER BY total_pnl DESC, u.id ASC
+		LIMIT 10
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	board := []LeaderboardRow{}
+	for rows.Next() {
+		row := LeaderboardRow{Rank: len(board) + 1}
+		if err := rows.Scan(&row.UserID, &row.Name, &row.PnL); err != nil {
+			return nil, err
+		}
+		board = append(board, row)
+	}
+	return board, rows.Err()
+}
+
 // Leaderboard ranks users by realized P&L (buys, sells and payouts) in markets
 // that settled on charts dated within the period. With groupID it ranks only
 // that group's members.

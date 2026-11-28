@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -11,36 +10,10 @@ import (
 func TestLimitSettlementRace(t *testing.T) {
 	db := testDB(t)
 	market, song, date := newMarket(t, db, 50, 5, 50)
-	yes := newUser(t, db)
-	no := newUser(t, db)
-	submitTestOrder(t, db, Order{
-		UserID:    yes,
-		MarketID:  market,
-		RequestID: "seed-yes",
-		Side:      "yes",
-		Action:    "buy",
-		Price:     50,
-		Quantity:  10,
-	})
-	submitTestOrder(t, db, Order{
-		UserID:    no,
-		MarketID:  market,
-		RequestID: "seed-no",
-		Side:      "no",
-		Action:    "buy",
-		Price:     50,
-		Quantity:  10,
-	})
-	buyer := newUser(t, db)
-	submitTestOrder(t, db, Order{
-		UserID:    buyer,
-		MarketID:  market,
-		RequestID: "bid",
-		Side:      "yes",
-		Action:    "buy",
-		Price:     60,
-		Quantity:  10,
-	})
+	yes, no, buyer := newUser(t, db), newUser(t, db), newUser(t, db)
+	mustOrder(t, db, yes, market, "yes", "buy", 50, 10)
+	mustOrder(t, db, no, market, "no", "buy", 50, 10)
+	mustOrder(t, db, buyer, market, "yes", "buy", 60, 10)
 	addRank(t, db, song, date, 40)
 	fillChart(t, db, date)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -91,20 +64,10 @@ func TestLimitSettlementRace(t *testing.T) {
 	}
 }
 
-func submitTestOrder(t *testing.T, db *sql.DB, order Order) Order {
-	t.Helper()
-	result, err := PlaceOrder(context.Background(), db, order)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return result
-}
-
 func TestLimitComplementaryAndRetry(t *testing.T) {
 	db := testDB(t)
 	market, _, _ := newMarket(t, db, 50, 5, 50)
-	yesUser := newUser(t, db)
-	noUser := newUser(t, db)
+	yesUser, noUser := newUser(t, db), newUser(t, db)
 	yes := Order{
 		UserID:    yesUser,
 		MarketID:  market,
@@ -118,15 +81,7 @@ func TestLimitComplementaryAndRetry(t *testing.T) {
 	if first.Remaining != 10 {
 		t.Fatal("unmatched order should remain open")
 	}
-	no := submitTestOrder(t, db, Order{
-		UserID:    noUser,
-		MarketID:  market,
-		RequestID: "no-1",
-		Side:      "no",
-		Action:    "buy",
-		Price:     45,
-		Quantity:  4,
-	})
+	no := mustOrder(t, db, noUser, market, "no", "buy", 45, 4)
 	if no.Remaining != 0 {
 		t.Fatal("complementary order did not fill")
 	}
@@ -146,63 +101,13 @@ func TestLimitComplementaryAndRetry(t *testing.T) {
 func TestLimitPriceTimeAndPartialFills(t *testing.T) {
 	db := testDB(t)
 	market, _, _ := newMarket(t, db, 50, 5, 50)
-	seller := newUser(t, db)
-	other := newUser(t, db)
-	buyer := newUser(t, db)
-	submitTestOrder(t, db, Order{
-		UserID:    seller,
-		MarketID:  market,
-		RequestID: "seed-yes",
-		Side:      "yes",
-		Action:    "buy",
-		Price:     50,
-		Quantity:  20,
-	})
-	submitTestOrder(t, db, Order{
-		UserID:    other,
-		MarketID:  market,
-		RequestID: "seed-no",
-		Side:      "no",
-		Action:    "buy",
-		Price:     50,
-		Quantity:  20,
-	})
-	expensive := submitTestOrder(t, db, Order{
-		UserID:    seller,
-		MarketID:  market,
-		RequestID: "expensive",
-		Side:      "yes",
-		Action:    "sell",
-		Price:     60,
-		Quantity:  8,
-	})
-	cheap := submitTestOrder(t, db, Order{
-		UserID:    seller,
-		MarketID:  market,
-		RequestID: "cheap",
-		Side:      "yes",
-		Action:    "sell",
-		Price:     55,
-		Quantity:  4,
-	})
-	later := submitTestOrder(t, db, Order{
-		UserID:    seller,
-		MarketID:  market,
-		RequestID: "later",
-		Side:      "yes",
-		Action:    "sell",
-		Price:     55,
-		Quantity:  4,
-	})
-	bought := submitTestOrder(t, db, Order{
-		UserID:    buyer,
-		MarketID:  market,
-		RequestID: "take",
-		Side:      "yes",
-		Action:    "buy",
-		Price:     60,
-		Quantity:  11,
-	})
+	seller, other, buyer := newUser(t, db), newUser(t, db), newUser(t, db)
+	mustOrder(t, db, seller, market, "yes", "buy", 50, 20)
+	mustOrder(t, db, other, market, "no", "buy", 50, 20)
+	expensive := mustOrder(t, db, seller, market, "yes", "sell", 60, 8)
+	cheap := mustOrder(t, db, seller, market, "yes", "sell", 55, 4)
+	later := mustOrder(t, db, seller, market, "yes", "sell", 55, 4)
+	bought := mustOrder(t, db, buyer, market, "yes", "buy", 60, 11)
 	rows, err := db.Query(`SELECT maker_id, quantity FROM trades WHERE taker_id = $1 ORDER BY id`, bought.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -213,8 +118,7 @@ func TestLimitPriceTimeAndPartialFills(t *testing.T) {
 	index := 0
 	for rows.Next() {
 		var id, quantity int64
-		err = rows.Scan(&id, &quantity)
-		if err != nil {
+		if err = rows.Scan(&id, &quantity); err != nil {
 			t.Fatal(err)
 		}
 		if index >= len(wantIDs) || id != wantIDs[index] || quantity != wantQuantities[index] {
@@ -240,7 +144,7 @@ func TestLimitConcurrentReservations(t *testing.T) {
 	defer cancel()
 	start := make(chan struct{})
 	results := make(chan error, 2)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		order := Order{
 			UserID:    user,
 			MarketID:  market,
@@ -257,9 +161,8 @@ func TestLimitConcurrentReservations(t *testing.T) {
 		}(order)
 	}
 	close(start)
-	successes := 0
-	refusals := 0
-	for i := 0; i < 2; i++ {
+	successes, refusals := 0, 0
+	for range 2 {
 		err := <-results
 		if err == nil {
 			successes++
@@ -278,41 +181,15 @@ func TestLimitConcurrentReservations(t *testing.T) {
 func TestLimitConcurrentSales(t *testing.T) {
 	db := testDB(t)
 	market, _, _ := newMarket(t, db, 50, 5, 50)
-	seller := newUser(t, db)
-	other := newUser(t, db)
-	buyer := newUser(t, db)
-	submitTestOrder(t, db, Order{
-		UserID:    seller,
-		MarketID:  market,
-		RequestID: "seed-yes",
-		Side:      "yes",
-		Action:    "buy",
-		Price:     50,
-		Quantity:  10,
-	})
-	submitTestOrder(t, db, Order{
-		UserID:    other,
-		MarketID:  market,
-		RequestID: "seed-no",
-		Side:      "no",
-		Action:    "buy",
-		Price:     50,
-		Quantity:  10,
-	})
-	submitTestOrder(t, db, Order{
-		UserID:    buyer,
-		MarketID:  market,
-		RequestID: "bid",
-		Side:      "yes",
-		Action:    "buy",
-		Price:     60,
-		Quantity:  10,
-	})
+	seller, other, buyer := newUser(t, db), newUser(t, db), newUser(t, db)
+	mustOrder(t, db, seller, market, "yes", "buy", 50, 10)
+	mustOrder(t, db, other, market, "no", "buy", 50, 10)
+	mustOrder(t, db, buyer, market, "yes", "buy", 60, 10)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	start := make(chan struct{})
 	results := make(chan error, 2)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		order := Order{
 			UserID:    seller,
 			MarketID:  market,
@@ -329,9 +206,8 @@ func TestLimitConcurrentSales(t *testing.T) {
 		}(order)
 	}
 	close(start)
-	successes := 0
-	refusals := 0
-	for i := 0; i < 2; i++ {
+	successes, refusals := 0, 0
+	for range 2 {
 		err := <-results
 		if err == nil {
 			successes++
@@ -351,44 +227,11 @@ func TestLimitConcurrentSales(t *testing.T) {
 func TestLimitComplementarySales(t *testing.T) {
 	db := testDB(t)
 	market, _, _ := newMarket(t, db, 50, 5, 50)
-	yes := newUser(t, db)
-	no := newUser(t, db)
-	submitTestOrder(t, db, Order{
-		UserID:    yes,
-		MarketID:  market,
-		RequestID: "yes-buy",
-		Side:      "yes",
-		Action:    "buy",
-		Price:     50,
-		Quantity:  10,
-	})
-	submitTestOrder(t, db, Order{
-		UserID:    no,
-		MarketID:  market,
-		RequestID: "no-buy",
-		Side:      "no",
-		Action:    "buy",
-		Price:     50,
-		Quantity:  10,
-	})
-	submitTestOrder(t, db, Order{
-		UserID:    yes,
-		MarketID:  market,
-		RequestID: "yes-sell",
-		Side:      "yes",
-		Action:    "sell",
-		Price:     60,
-		Quantity:  10,
-	})
-	result := submitTestOrder(t, db, Order{
-		UserID:    no,
-		MarketID:  market,
-		RequestID: "no-sell",
-		Side:      "no",
-		Action:    "sell",
-		Price:     35,
-		Quantity:  10,
-	})
+	yes, no := newUser(t, db), newUser(t, db)
+	mustOrder(t, db, yes, market, "yes", "buy", 50, 10)
+	mustOrder(t, db, no, market, "no", "buy", 50, 10)
+	mustOrder(t, db, yes, market, "yes", "sell", 60, 10)
+	result := mustOrder(t, db, no, market, "no", "sell", 35, 10)
 	if result.Remaining != 0 {
 		t.Fatal("complementary sales did not fill")
 	}

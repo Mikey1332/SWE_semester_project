@@ -46,7 +46,9 @@ func findMatchingOrder(ctx context.Context, tx *sql.Tx, order Order) (Order, err
 		if err != nil {
 			return Order{}, err
 		}
-
+		if order.countertrade && (otherOrder.Price < botMinPrice || otherOrder.Price > botMaxPrice) {
+			continue
+		}
 		action, price := otherOrder.quoteForSide(order.Side)
 		if action == order.Action {
 			continue

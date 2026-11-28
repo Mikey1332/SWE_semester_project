@@ -12,16 +12,17 @@ var ErrLimitOrder = errors.New("invalid limit order")
 var ErrRequestConflict = errors.New("ID already used for a different order")
 
 type Order struct {
-	ID        int64  `json:"id"`
-	UserID    int64  `json:"user_id"`
-	MarketID  int64  `json:"market_id"`
-	RequestID string `json:"request_id"`
-	Side      string `json:"side"`
-	Action    string `json:"action"`
-	Price     int64  `json:"price"`
-	Quantity  int64  `json:"quantity"`
-	Remaining int64  `json:"remaining"`
-	Cancelled bool   `json:"cancelled"`
+	ID           int64  `json:"id"`
+	UserID       int64  `json:"user_id"`
+	MarketID     int64  `json:"market_id"`
+	RequestID    string `json:"request_id"`
+	Side         string `json:"side"`
+	Action       string `json:"action"`
+	Price        int64  `json:"price"`
+	Quantity     int64  `json:"quantity"`
+	Remaining    int64  `json:"remaining"`
+	Cancelled    bool   `json:"cancelled"`
+	countertrade bool
 }
 
 func validateOrder(order Order) error {
@@ -254,7 +255,14 @@ func PlaceOrder(ctx context.Context, db *sql.DB, order Order) (Order, error) {
 		}
 		order.Remaining = order.Remaining - quantity
 	}
-
+	if order.countertrade && order.Remaining > 0 {
+		if _, err := tx.ExecContext(ctx, `
+            UPDATE orders SET cancelled = true WHERE id = $1
+        `, order.ID); err != nil {
+			return Order{}, err
+		}
+		order.Cancelled = true
+	}
 	err = tx.Commit()
 	if err != nil {
 		return Order{}, err

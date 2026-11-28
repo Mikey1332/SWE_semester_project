@@ -727,7 +727,11 @@ func main() {
 		}
 		log.Println("Database migrated")
 		currentUser = firebaseUser(authClient, db)
-		go RunBots(ctx, db)
+		botUserID, err := strconv.ParseInt(os.Getenv("LIQUIDITY_BOT_USER_ID"), 10, 64)
+		if err != nil || botUserID <= 0 {
+			log.Fatal("invalid LIQUIDITY_BOT_USER_ID")
+		}
+		go RunBots(ctx, db, botUserID)
 	} else {
 		log.Println("DATABASE_URL not set: sign-in and trading return 503 until it is set")
 		currentUser = func(*http.Request) (int64, error) { return 0, errNoDatabase }

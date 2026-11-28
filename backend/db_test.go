@@ -851,8 +851,8 @@ func TestT16BotsRunOnStart(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBots(ctx, db) // what main() starts
-
+	botUserID := newUser(t, db)
+	go RunBots(ctx, db, botUserID)
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(200 * time.Millisecond) {
 		var status string
 		if err := db.QueryRow(`SELECT status FROM markets WHERE id = $1`, marketID).Scan(&status); err != nil {

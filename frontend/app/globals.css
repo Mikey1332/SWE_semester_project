@@ -157,12 +157,6 @@ button:hover {
 .primary.small {
   padding:12px 19px
 }
-.user-name {
-  font-size:12px;
-  max-width:110px;
-  overflow:hidden;
-  text-overflow:ellipsis
-}
 .ticker {
   height:43px;
   display:flex;
@@ -428,14 +422,6 @@ main {
 }
 .floating-pill .sparkline {
   width:55px
-}
-.art-caption {
-  position:absolute;
-  bottom:-7px;
-  font-size:7px;
-  letter-spacing:1.5px;
-  color:#939489;
-  left:105px
 }
 .market-section {
   padding:38px 0 40px;
@@ -802,10 +788,6 @@ footer {
   letter-spacing:-1.5px;
   color:#53594a
 }
-.footer-brand .brand-mark {
-  font-size:29px;
-  margin-right:5px
-}
 .footer-right {
   margin-left:auto;
   display:flex;
@@ -1089,13 +1071,6 @@ footer {
   border-color:#d4e8bc;
   color:#3c512f
 }
-.order-disclaimer {
-  text-align:center;
-  font-size:9px;
-  line-height:1.8;
-  color:#929786;
-  margin:18px 0 0
-}
 .order-status {
   font-size:11px;
   line-height:1.6;
@@ -1273,9 +1248,6 @@ footer {
   .card-trades>button {
     padding:10px 9px
   }
-  .floating-pill {
-    right:-15px
-  }
   .detail-layout {
     gap:20px;
     grid-template-columns:minmax(0,1fr) 300px
@@ -1436,10 +1408,6 @@ footer {
   .brand {
     font-size:26px
   }
-  .brand-mark {
-    font-size:31px;
-    margin-right:5px
-  }
   .account-actions {
     gap:12px
   }
@@ -1450,16 +1418,6 @@ footer {
     font-size:10px;
     padding:9px 10px;
     gap:8px
-  }
-  .ticker {
-    height:37px;
-    gap:23px
-  }
-  .ticker button {
-    font-size:10px
-  }
-  .ticker-label {
-    font-size:8px
   }
   .hero {
     grid-template-columns:1fr;
@@ -1480,48 +1438,12 @@ footer {
   .hero-copy>p {
     font-size:12px
   }
-  .hero-art {
-    height:282px;
-    margin-top:5px;
-    transform:scale(.8)
-  }
   .hero-actions .primary {
     font-size:12px;
     padding:14px 18px
   }
   .hero-actions .text-button {
     font-size:11px
-  }
-  .hero-footnote {
-    font-size:10px;
-    margin-top:18px
-  }
-  .record-sleeve {
-    transform:rotate(-10deg) scale(.95)
-  }
-  .floating-pill {
-    right:5px;
-    bottom:-5px
-  }
-  .art-caption {
-    bottom:-30px;
-    left:80px
-  }
-  .orbit-one {
-    height:270px;
-    width:270px
-  }
-  .orbit-two {
-    height:220px;
-    width:220px
-  }
-  .note-one {
-    right:20px;
-    top:-15px
-  }
-  .note-two {
-    left:5px;
-    bottom:30px
   }
   .market-section {
     padding-top:30px
@@ -1898,9 +1820,6 @@ footer {
   }
 }
 
-.auth-error {
-  color: #b42318;
-}
 .detail-heading-info {
   flex:1;
   min-width:0;
@@ -1911,7 +1830,7 @@ footer {
   display:flex;
   align-items:center;
   justify-content:space-between;
-  gap:16px;
+ gap:16px;
   padding:14px 18px;
   border:1px solid var(--line);
   border-radius:10px;

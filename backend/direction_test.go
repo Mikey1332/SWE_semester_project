@@ -24,31 +24,14 @@ func TestDirectionSettlement(t *testing.T) {
 			db := testDB(t)
 			ctx := context.Background()
 			market, song, date := newMarket(t, db, test.before, 1, 60)
-			up := newUser(t, db)
-			down := newUser(t, db)
-			submitTestOrder(t, db, Order{
-				UserID:    up,
-				MarketID:  market,
-				RequestID: "up",
-				Side:      "yes",
-				Action:    "buy",
-				Price:     60,
-				Quantity:  10,
-			})
-			submitTestOrder(t, db, Order{
-				UserID:    down,
-				MarketID:  market,
-				RequestID: "down",
-				Side:      "no",
-				Action:    "buy",
-				Price:     40,
-				Quantity:  10,
-			})
+			up, down := newUser(t, db), newUser(t, db)
+			mustOrder(t, db, up, market, "yes", "buy", 60, 10)
+			mustOrder(t, db, down, market, "no", "buy", 40, 10)
 			if test.after <= 100 {
 				addRank(t, db, song, date, test.after)
 			}
 			fillChart(t, db, date)
-			for i := 0; i < 2; i++ {
+			for range 2 {
 				if err := Resolve(ctx, db, market); err != nil {
 					t.Fatal(err)
 				}
@@ -78,48 +61,14 @@ func TestRefundAfterPartialSale(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
 	market, song, date := newMarket(t, db, 30, 1, 60)
-	up := newUser(t, db)
-	down := newUser(t, db)
-	buyer := newUser(t, db)
-	submitTestOrder(t, db, Order{
-		UserID:    up,
-		MarketID:  market,
-		RequestID: "up",
-		Side:      "yes",
-		Action:    "buy",
-		Price:     60,
-		Quantity:  10,
-	})
-	submitTestOrder(t, db, Order{
-		UserID:    down,
-		MarketID:  market,
-		RequestID: "down",
-		Side:      "no",
-		Action:    "buy",
-		Price:     40,
-		Quantity:  10,
-	})
-	submitTestOrder(t, db, Order{
-		UserID:    buyer,
-		MarketID:  market,
-		RequestID: "bid",
-		Side:      "yes",
-		Action:    "buy",
-		Price:     70,
-		Quantity:  4,
-	})
-	submitTestOrder(t, db, Order{
-		UserID:    up,
-		MarketID:  market,
-		RequestID: "sell",
-		Side:      "yes",
-		Action:    "sell",
-		Price:     65,
-		Quantity:  4,
-	})
+	up, down, buyer := newUser(t, db), newUser(t, db), newUser(t, db)
+	mustOrder(t, db, up, market, "yes", "buy", 60, 10)
+	mustOrder(t, db, down, market, "no", "buy", 40, 10)
+	mustOrder(t, db, buyer, market, "yes", "buy", 70, 4)
+	mustOrder(t, db, up, market, "yes", "sell", 65, 4)
 	addRank(t, db, song, date, 30)
 	fillChart(t, db, date)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := Resolve(ctx, db, market); err != nil {
 			t.Fatal(err)
 		}

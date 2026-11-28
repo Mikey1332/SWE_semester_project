@@ -190,6 +190,11 @@ func routes(db *sql.DB) http.Handler {
 			}
 			markets = append(markets, m)
 		}
+		if err := rows.Err(); err != nil {
+			log.Printf("markets: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 		writeJSON(w, markets)
 	})
 
@@ -322,7 +327,6 @@ func routes(db *sql.DB) http.Handler {
 		serveProfile(w, r, db)
 	})
 
-	// Body: {"side": "yes" | "no", "quantity": n}. Returns {"balance": n}. Written out beacuse it caused an errors
 	mux.HandleFunc("POST /markets/{id}/orders", func(w http.ResponseWriter, r *http.Request) {
 		orderHandler(w, r, db)
 	})
@@ -441,7 +445,6 @@ func routes(db *sql.DB) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 		}
 	})
-	// Body: {"name": "..."}. Creates a group with the signed-in user as its first member. Returns {"id": n}.
 	mux.HandleFunc("POST /groups", func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := signedIn(w, r)
 		if !ok {
@@ -727,7 +730,17 @@ func main() {
 		}
 		log.Println("Database migrated")
 		currentUser = firebaseUser(authClient, db)
-		go RunBots(ctx, db)
+		var botUserID int64
+		if raw := strings.TrimSpace(os.Getenv("LIQUIDITY_BOT_USER_ID")); raw != "" {
+			botUserID, err = strconv.ParseInt(raw, 10, 64)
+			if err != nil || botUserID <= 0 {
+				log.Fatal("invalid LIQUIDITY_BOT_USER_ID")
+			}
+		} else {
+			log.Println("LIQUIDITY_BOT_USER_ID not set: countertrade bot disabled")
+		}
+		liquidityBotUserID = botUserID
+		go RunBots(ctx, db, botUserID)
 	} else {
 		log.Println("DATABASE_URL not set: sign-in and trading return 503 until it is set")
 		currentUser = func(*http.Request) (int64, error) { return 0, errNoDatabase }

@@ -23,6 +23,8 @@ type LeaderboardRow struct {
 // ProfileLeaderboard uses the same realized + unrealized P&L as GetProfile.
 // Query every profile on each request so new users need no enrollment or backfill.
 // A stable ID tie-breaker keeps equal P&L rankings consistent.
+var liquidityBotUserID int64
+
 func ProfileLeaderboard(ctx context.Context, db *sql.DB) ([]LeaderboardRow, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT u.id,
@@ -36,9 +38,10 @@ func ProfileLeaderboard(ctx context.Context, db *sql.DB) ([]LeaderboardRow, erro
 			FROM positions p JOIN markets m ON m.id = p.market_id
 			GROUP BY p.user_id
 		) pos ON pos.user_id = u.id
+		WHERE u.id <> $1
 		ORDER BY total_pnl DESC, u.id ASC
 		LIMIT 10
-	`)
+	`, liquidityBotUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +69,7 @@ func Leaderboard(ctx context.Context, db *sql.DB, period string, groupID *int64)
 		SELECT u.id, coalesce(u.username, split_part(u.email, '@', 1), 'Player ' || u.id), coalesce(sum(l.amount), 0)
 		FROM users u
 		LEFT JOIN (ledger_entries l JOIN markets m ON m.id = l.market_id AND m.status = 'resolved' AND ($1 = 0 OR m.chart_date >= current_date - $1::int))
-			ON l.user_id = u.id AND l.kind IN ('buy', 'sell', 'payout')
+			ON l.user_id = u.id AND l.kind IN ('buy', 'sell', 'payout', 'refund')
 		WHERE CASE WHEN $2::bigint IS NULL THEN l.id IS NOT NULL
 			ELSE EXISTS (SELECT 1 FROM group_members g WHERE g.group_id = $2 AND g.user_id = u.id) END
 		GROUP BY u.id

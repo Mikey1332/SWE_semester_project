@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -16,7 +17,61 @@ import (
 const closeDaysBefore = 5
 
 const botInterval = 15 * time.Minute
+const (
+	botMinPrice = 40
+	botMaxPrice = 60
+	botMaxFill  = 5
+)
 
+func countertrade(ctx context.Context, db *sql.DB, botUserID int64) error {
+	var waiting Order
+	err := db.QueryRowContext(ctx, `
+        SELECT o.market_id, o.side, o.action, o.price, o.remaining
+        FROM orders o
+        JOIN markets m ON m.id = o.market_id
+        WHERE o.user_id <> $1
+          AND o.remaining > 0
+          AND NOT o.cancelled
+          AND o.price BETWEEN $2 AND $3
+          AND m.status = 'open'
+          AND m.closes_at > clock_timestamp()
+        ORDER BY o.id
+        LIMIT 1
+    `, botUserID, botMinPrice, botMaxPrice).Scan(
+		&waiting.MarketID, &waiting.Side, &waiting.Action,
+		&waiting.Price, &waiting.Remaining,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // No possible trades
+	}
+	if err != nil {
+		return err
+	}
+
+	side := waiting.Side
+	price := waiting.Price
+	if waiting.Action == "buy" {
+		// Matches where sum = 1
+		if side == "yes" {
+			side = "no"
+		} else {
+			side = "yes"
+		}
+		price = ContractPayout - price
+	}
+
+	_, err = PlaceOrder(ctx, db, Order{
+		UserID:       botUserID,
+		MarketID:     waiting.MarketID,
+		RequestID:    "countertrade-" + rand.Text(),
+		Side:         side,
+		Action:       "buy",
+		Price:        price,
+		Quantity:     min(waiting.Remaining, botMaxFill),
+		countertrade: true,
+	})
+	return err
+}
 func suggest(ranks []int) (shift, yesPrice int) {
 	current := ranks[len(ranks)-1]
 	wins := 0
@@ -101,9 +156,9 @@ func CreateMarkets(ctx context.Context, db *sql.DB, chartDate string) (int, erro
 }
 
 // RunBots calls botTick every botInterval until ctx is cancelled.
-func RunBots(ctx context.Context, db *sql.DB) {
+func RunBots(ctx context.Context, db *sql.DB, botUserID int64) {
 	for {
-		runBotTick(ctx, db)
+		runBotTick(ctx, db, botUserID)
 		select {
 		case <-ctx.Done():
 			return
@@ -112,8 +167,7 @@ func RunBots(ctx context.Context, db *sql.DB) {
 	}
 }
 
-// runBotTick runs one tick and logs any failure. So one bad tick never stops bots or takes server down.
-func runBotTick(ctx context.Context, db *sql.DB) {
+func runBotTick(ctx context.Context, db *sql.DB, botUserID int64) {
 	defer func() {
 		if p := recover(); p != nil {
 			log.Printf("bots: panic: %v\n%s", p, debug.Stack())
@@ -121,6 +175,11 @@ func runBotTick(ctx context.Context, db *sql.DB) {
 	}()
 	if err := botTick(ctx, db); err != nil {
 		log.Printf("bots: %v", err)
+	}
+	if botUserID > 0 {
+		if err := countertrade(ctx, db, botUserID); err != nil {
+			log.Printf("bots: countertrade error: %v", err)
+		}
 	}
 }
 

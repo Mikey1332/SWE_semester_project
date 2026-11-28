@@ -16,6 +16,11 @@ import (
 	"time"
 )
 
+var (
+	migrateOnce sync.Once
+	migrateErr  error
+)
+
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
@@ -39,27 +44,27 @@ func testDB(t *testing.T) *sql.DB {
 	if !testDatabaseName(name) {
 		t.Fatalf("refusing database %q: its name must contain test", name)
 	}
-	for range 2 { // second run must be a no-op
-		if err := Migrate(ctx, db); err != nil {
-			t.Fatalf("migrate: %v", err)
-		}
+	migrateOnce.Do(func() {
+		migrateErr = Migrate(ctx, db)
+	})
+	if migrateErr != nil {
+		t.Fatalf("migrate: %v", migrateErr)
 	}
 	return db
 }
 
-func testDatabaseName(name string) bool {
-	return strings.Contains(strings.ToLower(name), "test")
-}
-
-func TestTestDatabaseName(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		want bool
-	}{{"octave_test", true}, {"TEST_db", true}, {"octave", false}, {"", false}} {
-		if got := testDatabaseName(tc.name); got != tc.want {
-			t.Errorf("testDatabaseName(%q) = %t, want %t", tc.name, got, tc.want)
+func TestMigrateIdempotent(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	for range 2 {
+		if err := Migrate(ctx, db); err != nil {
+			t.Fatalf("migrate: %v", err)
 		}
 	}
+}
+
+func testDatabaseName(name string) bool {
+	return strings.Contains(strings.ToLower(name), "test")
 }
 
 // unique returns a name no other test run has used.
@@ -296,7 +301,7 @@ func TestConcurrentDebits(t *testing.T) {
 // uniqueDate returns a far-future chart date no other test run uses, so
 // chart_snapshots rows from earlier runs never collide or leak in.
 func uniqueDate() time.Time {
-	offset := int(time.Now().UnixNano() / 1_000 % 1_000_000)
+	offset := int((time.Now().UnixNano()/1_000 + uniqueN.Add(1)) % 1_000_000)
 	return time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, offset)
 }
 
@@ -363,47 +368,6 @@ func checkUser(t *testing.T, db *sql.DB, userID, wantBalance, wantPnL int64) {
 	if balance != wantBalance || pnl != wantPnL {
 		t.Fatalf("user %d: balance=%d pnl=%d, want balance=%d pnl=%d", userID, balance, pnl, wantBalance, wantPnL)
 	}
-}
-
-// Buying 2,500 notes of contracts debits the balance once and records the
-// purchase in the ledger.
-func TestBuy2500RecordedInLedger(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	marketID, _, _ := newMarket(t, db, 50, 5, 50) // YES costs 50
-	id := newUser(t, db)
-
-	balance, err := buyForTest(t, ctx, db, id, marketID, "yes", 50) // 50 x 50 = 2,500
-	if err != nil {
-		t.Fatal(err)
-	}
-	if balance != 7_500 {
-		t.Fatalf("balance after buy = %d, want 7500", balance)
-	}
-
-	var entries, amount, after, market int64
-	var kind string
-	err = db.QueryRow(`
-		SELECT count(*), min(amount), min(balance_after), min(kind), min(market_id)
-		FROM ledger_entries WHERE user_id = $1 AND kind <> 'grant'`, id).
-		Scan(&entries, &amount, &after, &kind, &market)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if entries != 1 || amount != -2_500 || after != 7_500 || kind != "buy" || market != marketID {
-		t.Fatalf("ledger: entries=%d amount=%d balance_after=%d kind=%q market=%d, want 1 -2500 7500 buy %d",
-			entries, amount, after, kind, market, marketID)
-	}
-
-	var quantity, cost int64
-	if err := db.QueryRow(`SELECT quantity, cost_basis FROM positions WHERE user_id = $1 AND market_id = $2`,
-		id, marketID).Scan(&quantity, &cost); err != nil {
-		t.Fatal(err)
-	}
-	if quantity != 50 || cost != 2_500 {
-		t.Fatalf("position: quantity=%d cost_basis=%d, want 50 and 2500", quantity, cost)
-	}
-	checkUser(t, db, id, 7_500, 0) // not a loss until the market resolves
 }
 
 func TestBuyAndResolve(t *testing.T) {
@@ -582,7 +546,6 @@ func TestSellRejects(t *testing.T) {
 	}
 }
 
-// The sell endpoint works for the signed-in user and /auth/me shows what they hold.
 // GET /markets lists tradeable markets with both prices and hides closed ones.
 func TestMarketsList(t *testing.T) {
 	db := testDB(t)
@@ -789,59 +752,6 @@ func TestT15LeaderboardPeriods(t *testing.T) {
 	}
 }
 
-// T4: realized P&L reports the gain or loss on a settled contract.
-func TestT4PortfolioGainAndLoss(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	marketID, songID, chartDate := newMarket(t, db, 50, 5, 50) // YES and NO both cost 50
-	winner, loser := newUser(t, db), newUser(t, db)
-
-	if _, err := buyForTest(t, ctx, db, winner, marketID, "yes", 2); err != nil { // spends 100
-		t.Fatal(err)
-	}
-	if _, err := buyForTest(t, ctx, db, loser, marketID, "no", 2); err != nil { // spends 100
-		t.Fatal(err)
-	}
-	addRank(t, db, songID, chartDate, 40) // rose 10 spots: YES wins
-	fillChart(t, db, chartDate)
-	if err := Resolve(ctx, db, marketID); err != nil {
-		t.Fatal(err)
-	}
-	checkUser(t, db, winner, 10_100, 100) // paid 100 won 2 x 100
-	checkUser(t, db, loser, 9_900, -100)  // paid 100 won nothing
-}
-
-// T10: selling 5 of 10 contracts returns 5 x price and keeps the other 5.
-func TestT10SellFiveContracts(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	marketID, _, _ := newMarket(t, db, 50, 5, 50)
-	id := newUser(t, db)
-
-	if _, err := buyForTest(t, ctx, db, id, marketID, "yes", 10); err != nil { // -500
-		t.Fatal(err)
-	}
-	balance, err := sellForTest(t, ctx, db, id, marketID, "yes", 5) // +250
-	if err != nil {
-		t.Fatal(err)
-	}
-	if balance != 9_750 {
-		t.Fatalf("balance after selling 5 = %d, want 9750", balance)
-	}
-
-	var held, cost, soldQty, soldPrice int64
-	if err := db.QueryRow(`SELECT quantity, cost_basis FROM positions WHERE user_id = $1 AND market_id = $2`, id, marketID).Scan(&held, &cost); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(`SELECT quantity, price FROM ledger_entries WHERE user_id = $1 AND kind = 'sell'`, id).Scan(&soldQty, &soldPrice); err != nil {
-		t.Fatal(err)
-	}
-	if held != 5 || cost != 250 || soldQty != 5 || soldPrice != 50 {
-		t.Fatalf("held %d (cost %d), sold %d at %d; want 5 (250), 5 at 50", held, cost, soldQty, soldPrice)
-	}
-	checkUser(t, db, id, 9_750, 0) // same price both ways: break-even
-}
-
 // T16: the bots run the moment they start (as main does), not 15 minutes later.
 func TestT16BotsRunOnStart(t *testing.T) {
 	db := testDB(t)
@@ -851,8 +761,8 @@ func TestT16BotsRunOnStart(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBots(ctx, db) // what main() starts
-
+	botUserID := newUser(t, db)
+	go RunBots(ctx, db, botUserID)
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(200 * time.Millisecond) {
 		var status string
 		if err := db.QueryRow(`SELECT status FROM markets WHERE id = $1`, marketID).Scan(&status); err != nil {

@@ -2,75 +2,97 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 )
 
-// US9: a user can leave a group
-func TestLeaveGroup(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-
-	unique := fmt.Sprintf("%d", time.Now().UnixNano())
-
-	userID, err := UserForFirebase(ctx, db, "leave-test-"+unique, unique+"@example.com")
+func mustCreateGroup(t *testing.T, db *sql.DB, ownerID int64, name string, isPrivate bool) (int64, string) {
+	t.Helper()
+	id, code, err := CreateGroup(context.Background(), db, ownerID, name, isPrivate)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return id, code
+}
 
-	ownerID := newUser(t, db)
-	groupID, _, err := CreateGroup(ctx, db, ownerID, "Leave test "+unique, false)
-	if err != nil {
+func mustJoinGroup(t *testing.T, db *sql.DB, userID, groupID int64, code string) {
+	t.Helper()
+	if err := JoinGroup(context.Background(), db, userID, groupID, code); err != nil {
 		t.Fatal(err)
-	}
-
-	err = JoinGroup(ctx, db, userID, groupID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Leave the group.
-	err = LeaveGroup(ctx, db, userID, groupID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Check the membership was removed.
-	var count int
-	err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
-		groupID, userID,
-	).Scan(&count)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if count != 0 {
-		t.Fatal("user is still in the group")
-	}
-
-	// Leaving again should report that the user is not a member.
-	err = LeaveGroup(ctx, db, userID, groupID)
-	if !errors.Is(err, ErrNotGroupMember) {
-		t.Fatalf("expected ErrNotGroupMember, got %v", err)
 	}
 }
 
-// T19 + T20: a user joins a group once, and the group leaderboard ranks only its members.
+func assertGroupMember(t *testing.T, db *sql.DB, groupID, userID int64, want bool) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2`, groupID, userID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if (count == 1) != want {
+		t.Fatalf("group %d membership for user %d: count=%d, want member=%v", groupID, userID, count, want)
+	}
+}
+
+func assertGroupOwner(t *testing.T, db *sql.DB, groupID, wantOwnerID int64) {
+	t.Helper()
+	var ownerID int64
+	if err := db.QueryRow(`SELECT owner_id FROM user_groups WHERE id = $1`, groupID).Scan(&ownerID); err != nil {
+		t.Fatal(err)
+	}
+	if ownerID != wantOwnerID {
+		t.Fatalf("group %d owner=%d, want %d", groupID, ownerID, wantOwnerID)
+	}
+}
+
+func assertGroupCounts(t *testing.T, db *sql.DB, groupID int64, wantGroups, wantMembers, wantInvites int) {
+	t.Helper()
+	var groups, members, invites int
+	err := db.QueryRow(`
+		SELECT (SELECT COUNT(*) FROM user_groups WHERE id = $1),
+		       (SELECT COUNT(*) FROM group_members WHERE group_id = $1),
+		       (SELECT COUNT(*) FROM group_invites WHERE group_id = $1)`, groupID).Scan(&groups, &members, &invites)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if groups != wantGroups || members != wantMembers || invites != wantInvites {
+		t.Fatalf("group %d counts=(%d,%d,%d), want (%d,%d,%d)", groupID, groups, members, invites, wantGroups, wantMembers, wantInvites)
+	}
+}
+
+func signOutForTest(t *testing.T) {
+	t.Helper()
+	prev := currentUser
+	currentUser = func(*http.Request) (int64, error) { return 0, errNotSignedIn }
+	t.Cleanup(func() { currentUser = prev })
+}
+
+func doReq(handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	var r io.Reader
+	if body != "" {
+		r = strings.NewReader(body)
+	}
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, httptest.NewRequest(method, path, r))
+	return res
+}
+
 func TestT19T20GroupsAndGroupLeaderboard(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
-	member, outsider := newUser(t, db), newUser(t, db)
-	group, _, err := CreateGroup(ctx, db, member, unique("group"), false)
-	if err != nil {
-		t.Fatal(err)
+	member, newcomer, outsider := newUser(t, db), newUser(t, db), newUser(t, db)
+	name := unique("group")
+	group, _ := mustCreateGroup(t, db, member, name, false)
+
+	if _, _, err := CreateGroup(ctx, db, member, name, false); !errors.Is(err, ErrGroupNameTaken) {
+		t.Fatalf("duplicate name: got %v, want ErrGroupNameTaken", err)
 	}
 	if err := JoinGroup(ctx, db, member, group, ""); !errors.Is(err, ErrAlreadyMember) {
 		t.Fatalf("joining twice: got %v, want ErrAlreadyMember", err)
@@ -81,1158 +103,294 @@ func TestT19T20GroupsAndGroupLeaderboard(t *testing.T) {
 
 	m := resolvedMarket(t, db, 1)
 	earn(t, db, member, m, 250)
-	earn(t, db, outsider, m, 900) // more P&L, but not in the group
-
-	board, err := Leaderboard(ctx, db, "week", &group) // T20
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(board) != 1 || board[0].UserID != member || board[0].PnL != 250 || board[0].Rank != 1 {
-		t.Fatalf("group leaderboard = %+v, want only the member, ranked 1 with +250", board)
-	}
-}
-
-// US9: a taken group name is refused, and every member is ranked, even one who hasn't traded yet.
-func TestGroupCreateAndEveryMemberRanked(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	name := unique("friends")
-	trader, newcomer := newUser(t, db), newUser(t, db)
-
-	group, _, err := CreateGroup(ctx, db, trader, name, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if _, _, err := CreateGroup(ctx, db, trader, name, false); !errors.Is(err, ErrGroupNameTaken) {
-		t.Fatalf("duplicate name: got %v, want ErrGroupNameTaken", err)
-	}
-
-	if err := JoinGroup(ctx, db, newcomer, group, ""); err != nil {
-		t.Fatal(err)
-	}
-	earn(t, db, trader, resolvedMarket(t, db, 1), 250)
+	earn(t, db, outsider, m, 900)
 
 	board, err := Leaderboard(ctx, db, "week", &group)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(board) != 2 || board[0].UserID != trader || board[1].UserID != newcomer || board[1].PnL != 0 || board[1].Rank != 2 {
-		t.Fatalf("group leaderboard = %+v, want trader first and newcomer ranked 2nd with 0", board)
+	if len(board) != 1 || board[0].UserID != member || board[0].PnL != 250 || board[0].Rank != 1 {
+		t.Fatalf("group leaderboard = %+v, want only member ranked 1 with +250", board)
+	}
+
+	mustJoinGroup(t, db, newcomer, group, "")
+	board, err = Leaderboard(ctx, db, "week", &group)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(board) != 2 || board[0].UserID != member || board[1].UserID != newcomer || board[1].PnL != 0 || board[1].Rank != 2 {
+		t.Fatalf("group leaderboard = %+v, want member 1st and newcomer 2nd with 0", board)
 	}
 	if groups, err := MyGroups(ctx, db, newcomer); err != nil || len(groups) != 1 || groups[0].Members != 2 {
 		t.Fatalf("MyGroups = %+v, %v; want 1 group with 2 members", groups, err)
 	}
 }
 
-// US9: a public group records its owner and does not create an invite code.
-func TestCreatePublicGroup(t *testing.T) {
+func TestGroupCreationAndInvites(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
-	ownerID := newUser(t, db)
+	owner, user := newUser(t, db), newUser(t, db)
 
-	groupID, code, err := CreateGroup(ctx, db, ownerID, unique("public"), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if code != "" {
+	pubID, pubCode := mustCreateGroup(t, db, owner, unique("public"), false)
+	if pubCode != "" {
 		t.Fatal("public group should not return an invite code")
 	}
+	assertGroupOwner(t, db, pubID, owner)
+	assertGroupCounts(t, db, pubID, 1, 1, 0)
 
-	var savedOwnerID int64
-	var isPrivate bool
-
-	err = db.QueryRowContext(ctx,
-		"SELECT owner_id, is_private FROM user_groups WHERE id = $1",
-		groupID,
-	).Scan(&savedOwnerID, &isPrivate)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if savedOwnerID != ownerID {
-		t.Fatal("incorrect group owner")
-	}
-
-	if isPrivate {
-		t.Fatal("group should be public")
-	}
-
-	var inviteCount int
-	err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM group_invites WHERE group_id = $1",
-		groupID,
-	).Scan(&inviteCount)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if inviteCount != 0 {
-		t.Fatal("public group should not have a saved invite code")
-	}
-}
-
-// US9: a private group records its owner and saves a 32-character invite code.
-func TestCreatePrivateGroup(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	ownerID := newUser(t, db)
-
-	groupID, code, err := CreateGroup(ctx, db, ownerID, unique("private"), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(code) != 32 {
-		t.Fatal("invite code should contain 32 characters")
-	}
-
+	privID, code := mustCreateGroup(t, db, owner, unique("private"), true)
 	decoded, err := hex.DecodeString(code)
-	if err != nil || len(decoded) != 16 {
-		t.Fatal("invite code should represent 16 bytes in hexadecimal")
+	if len(code) != 32 || err != nil || len(decoded) != 16 {
+		t.Fatalf("invite code %q should be 32 hex chars (16 bytes)", code)
 	}
-
-	var savedOwnerID int64
-	var isPrivate bool
-
-	err = db.QueryRowContext(ctx,
-		"SELECT owner_id, is_private FROM user_groups WHERE id = $1",
-		groupID,
-	).Scan(&savedOwnerID, &isPrivate)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if savedOwnerID != ownerID {
-		t.Fatal("incorrect group owner")
-	}
-
-	if !isPrivate {
-		t.Fatal("group should be private")
-	}
-
+	assertGroupOwner(t, db, privID, owner)
+	assertGroupCounts(t, db, privID, 1, 1, 1)
 	var savedCode string
-	err = db.QueryRowContext(ctx,
-		"SELECT code FROM group_invites WHERE group_id = $1",
-		groupID,
-	).Scan(&savedCode)
-	if err != nil {
-		t.Fatal(err)
+	if err := db.QueryRow(`SELECT code FROM group_invites WHERE group_id = $1`, privID).Scan(&savedCode); err != nil || savedCode != code {
+		t.Fatalf("saved invite code = %q (%v), want %q", savedCode, err, code)
 	}
 
-	if savedCode != code {
-		t.Fatal("saved invite code does not match the returned code")
+	if err := JoinGroup(ctx, db, user, privID, ""); !errors.Is(err, ErrInviteRequired) {
+		t.Fatalf("missing invite: got %v, want ErrInviteRequired", err)
 	}
-
-	var memberCount int
-	err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
-		groupID, ownerID,
-	).Scan(&memberCount)
-	if err != nil {
-		t.Fatal(err)
+	if err := JoinGroup(ctx, db, user, privID, "invalid-code"); !errors.Is(err, ErrInvalidInvite) {
+		t.Fatalf("invalid invite: got %v, want ErrInvalidInvite", err)
 	}
+	assertGroupMember(t, db, privID, user, false)
 
-	if memberCount != 1 {
-		t.Fatal("owner should be a member of the private group")
+	mustJoinGroup(t, db, user, privID, code)
+	assertGroupMember(t, db, privID, user, true)
+	if err := JoinGroup(ctx, db, user, privID, code); !errors.Is(err, ErrAlreadyMember) {
+		t.Fatalf("duplicate invite join: got %v, want ErrAlreadyMember", err)
 	}
 }
 
-// US9: a private group cannot be joined using only its group ID.
-func TestPrivateGroupRequiresInvite(t *testing.T) {
+func TestGroupLeaveAndRemoval(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
+	owner, member, other := newUser(t, db), newUser(t, db), newUser(t, db)
+	groupID, _ := mustCreateGroup(t, db, owner, unique("members"), false)
+	mustJoinGroup(t, db, member, groupID, "")
+	mustJoinGroup(t, db, other, groupID, "")
 
-	ownerID := newUser(t, db)
-	userID := newUser(t, db)
+	if err := LeaveGroup(ctx, db, owner, groupID); !errors.Is(err, ErrGroupOwnerCannotLeave) {
+		t.Fatalf("owner leave: got %v, want ErrGroupOwnerCannotLeave", err)
+	}
+	assertGroupMember(t, db, groupID, owner, true)
 
-	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("private"), true)
-	if err != nil {
+	if err := LeaveGroup(ctx, db, member, groupID); err != nil {
 		t.Fatal(err)
 	}
-
-	err = JoinGroup(ctx, db, userID, groupID, "")
-	if !errors.Is(err, ErrInviteRequired) {
-		t.Fatalf("expected ErrInviteRequired, got %v", err)
+	assertGroupMember(t, db, groupID, member, false)
+	if err := LeaveGroup(ctx, db, member, groupID); !errors.Is(err, ErrNotGroupMember) {
+		t.Fatalf("leave twice: got %v, want ErrNotGroupMember", err)
 	}
 
-	// Check the rejected user was not added.
-	var count int
-	err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
-		groupID, userID,
-	).Scan(&count)
-	if err != nil {
+	mustJoinGroup(t, db, member, groupID, "")
+	if err := RemoveGroupMember(ctx, db, member, groupID, other); !errors.Is(err, ErrNotGroupOwner) {
+		t.Fatalf("member remove: got %v, want ErrNotGroupOwner", err)
+	}
+	if err := RemoveGroupMember(ctx, db, owner, groupID, owner); !errors.Is(err, ErrCannotRemoveOwner) {
+		t.Fatalf("owner self-remove: got %v, want ErrCannotRemoveOwner", err)
+	}
+	assertGroupMember(t, db, groupID, other, true)
+	assertGroupMember(t, db, groupID, owner, true)
+
+	if err := RemoveGroupMember(ctx, db, owner, groupID, other); err != nil {
 		t.Fatal(err)
 	}
+	assertGroupMember(t, db, groupID, other, false)
 
-	if count != 0 {
-		t.Fatal("user should not have joined the private group")
-	}
-}
-
-// US9: a user can join a private group with a valid invite code.
-func TestJoinGroupByInvite(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-
-	ownerID := newUser(t, db)
-	userID := newUser(t, db)
-
-	groupID, code, err := CreateGroup(ctx, db, ownerID, unique("private"), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = JoinGroup(ctx, db, userID, groupID, code)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var count int
-	err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
-		groupID, userID,
-	).Scan(&count)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if count != 1 {
-		t.Fatal("user should be a member of the group")
-	}
-
-	// Using the invitation again must not add a duplicate membership.
-	err = JoinGroup(ctx, db, userID, groupID, code)
-	if !errors.Is(err, ErrAlreadyMember) {
-		t.Fatalf("expected ErrAlreadyMember, got %v", err)
-	}
-}
-
-// US9: an invalid invite code does not add the user to any group.
-func TestInvalidGroupInvite(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	userID := newUser(t, db)
-
-	ownerID := newUser(t, db)
-	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("private"), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = JoinGroup(ctx, db, userID, groupID, "invalid-code")
-	if !errors.Is(err, ErrInvalidInvite) {
-		t.Fatalf("expected ErrInvalidInvite, got %v", err)
-	}
-
-	var count int
-	err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM group_members WHERE user_id = $1",
-		userID,
-	).Scan(&count)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if count != 0 {
-		t.Fatal("invalid invite should not create a membership")
-	}
-}
-
-// US9: the owner cannot leave and abandon their group.
-func TestGroupOwnerCannotLeave(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	ownerID := newUser(t, db)
-
-	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("owner"), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = LeaveGroup(ctx, db, ownerID, groupID)
-	if !errors.Is(err, ErrGroupOwnerCannotLeave) {
-		t.Fatalf("expected ErrGroupOwnerCannotLeave, got %v", err)
-	}
-
-	// The rejected action must leave the owner's membership intact.
-	var count int
-	err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
-		groupID, ownerID,
-	).Scan(&count)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if count != 1 {
-		t.Fatal("owner should still be a member")
-	}
-}
-
-// US9: the group owner can remove a member.
-func TestOwnerCanRemoveGroupMember(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	ownerID := newUser(t, db)
-	memberID := newUser(t, db)
-
-	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("remove"), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = JoinGroup(ctx, db, memberID, groupID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = RemoveGroupMember(ctx, db, ownerID, groupID, memberID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var count int
-	err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
-		groupID, memberID,
-	).Scan(&count)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if count != 0 {
-		t.Fatal("member should have been removed")
-	}
-}
-
-// US9: a regular member cannot remove another member.
-func TestMemberCannotRemoveGroupMember(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	ownerID := newUser(t, db)
-	memberID := newUser(t, db)
-	otherMemberID := newUser(t, db)
-
-	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("permissions"), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = JoinGroup(ctx, db, memberID, groupID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = JoinGroup(ctx, db, otherMemberID, groupID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = RemoveGroupMember(ctx, db, memberID, groupID, otherMemberID)
-	if !errors.Is(err, ErrNotGroupOwner) {
-		t.Fatalf("expected ErrNotGroupOwner, got %v", err)
-	}
-
-	var count int
-	err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
-		groupID, otherMemberID,
-	).Scan(&count)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if count != 1 {
-		t.Fatal("member should still belong to the group")
-	}
-}
-
-// US9: the owner cannot remove their own membership.
-func TestOwnerCannotRemoveThemselves(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	ownerID := newUser(t, db)
-
-	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("owner"), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = RemoveGroupMember(ctx, db, ownerID, groupID, ownerID)
-	if !errors.Is(err, ErrCannotRemoveOwner) {
-		t.Fatalf("expected ErrCannotRemoveOwner, got %v", err)
-	}
-
-	var count int
-	err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
-		groupID, ownerID,
-	).Scan(&count)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if count != 1 {
-		t.Fatal("owner should still belong to the group")
-	}
-}
-
-func TestRemoveGroupMemberAPI(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-
-	ownerID := newUser(t, db)
-	memberID := newUser(t, db)
-
-	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("remove-api"), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = JoinGroup(ctx, db, memberID, groupID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Restore normal authentication after this test.
-	originalCurrentUser := currentUser
-	t.Cleanup(func() {
-		currentUser = originalCurrentUser
-	})
-
-	path := fmt.Sprintf("/groups/%d/members/%d/remove", groupID, memberID)
 	handler := routes(db)
+	path := fmt.Sprintf("/groups/%d/members/%d/remove", groupID, member)
 
-	// Simulate a request from a regular member.
-	currentUser = func(r *http.Request) (int64, error) {
-		return memberID, nil
+	signInAs(t, member)
+	if res := doReq(handler, http.MethodPost, path, ""); res.Code != http.StatusForbidden {
+		t.Fatalf("regular member remove API: got %d, want 403", res.Code)
+	}
+	assertGroupMember(t, db, groupID, member, true)
+
+	signInAs(t, owner)
+	if res := doReq(handler, http.MethodPost, path, ""); res.Code != http.StatusNoContent {
+		t.Fatalf("owner remove API: got %d (%s), want 204", res.Code, res.Body.String())
+	}
+	assertGroupMember(t, db, groupID, member, false)
+}
+
+func TestGroupMembersAndPrivateAccess(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	owner, member, outsider := newUser(t, db), newUser(t, db), newUser(t, db)
+
+	privID, code := mustCreateGroup(t, db, owner, unique("private-access"), true)
+	mustJoinGroup(t, db, member, privID, code)
+	pubID, _ := mustCreateGroup(t, db, owner, unique("public-access"), false)
+
+	members, err := GetGroupMembers(ctx, db, member, privID)
+	if err != nil || len(members) != 2 {
+		t.Fatalf("private members = %+v (%v), want 2", members, err)
+	}
+	seen := map[int64]bool{}
+	for _, m := range members {
+		seen[m.UserID] = m.IsOwner
+	}
+	if !seen[owner] || seen[member] || len(seen) != 2 {
+		t.Fatalf("unexpected member owner flags: %+v", members)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, path, nil)
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 for regular member, got %d", response.Code)
+	if got, err := GetGroupMembers(ctx, db, outsider, privID); !errors.Is(err, ErrPrivateGroupAccess) || len(got) != 0 {
+		t.Fatalf("outsider private members = %+v, %v; want ErrPrivateGroupAccess", got, err)
+	}
+	if got, err := GetGroupMembers(ctx, db, outsider, pubID); err != nil || len(got) != 1 || got[0].UserID != owner || !got[0].IsOwner {
+		t.Fatalf("outsider public members = %+v, %v; want owner only", got, err)
 	}
 
-	// Confirm the rejected request did not remove the member.
-	var count int
-	err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
-		groupID, memberID,
-	).Scan(&count)
-	if err != nil {
-		t.Fatal(err)
+	handler := routes(db)
+	membersPath := fmt.Sprintf("/groups/%d/members", privID)
+	boardPath := fmt.Sprintf("/groups/%d/leaderboard", privID)
+
+	signOutForTest(t)
+	if res := doReq(handler, http.MethodGet, membersPath, ""); res.Code != http.StatusUnauthorized {
+		t.Fatalf("signed-out members API: got %d, want 401", res.Code)
 	}
 
-	if count != 1 {
-		t.Fatal("rejected request should not remove the member")
+	signInAs(t, outsider)
+	if res := doReq(handler, http.MethodGet, membersPath, ""); res.Code != http.StatusForbidden {
+		t.Fatalf("outsider members API: got %d, want 403", res.Code)
+	}
+	if res := doReq(handler, http.MethodGet, boardPath, ""); res.Code != http.StatusForbidden {
+		t.Fatalf("outsider board API: got %d, want 403", res.Code)
 	}
 
-	// Simulate a request from the owner.
-	currentUser = func(r *http.Request) (int64, error) {
-		return ownerID, nil
+	signInAs(t, owner)
+	res := doReq(handler, http.MethodGet, membersPath, "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("owner members API: got %d (%s), want 200", res.Code, res.Body.String())
 	}
-
-	request = httptest.NewRequest(http.MethodPost, path, nil)
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusNoContent {
-		t.Fatalf("expected 204 for owner, got %d: %s", response.Code, response.Body.String())
+	var got []GroupMember
+	if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil || len(got) != 2 {
+		t.Fatalf("owner members payload = %s (%v), want 2 members", res.Body.String(), err)
 	}
-
-	// Confirm the successful request removed the member.
-	err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM group_members WHERE group_id = $1 AND user_id = $2",
-		groupID, memberID,
-	).Scan(&count)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if count != 0 {
-		t.Fatal("owner's request should remove the member")
+	if res := doReq(handler, http.MethodGet, boardPath, ""); res.Code != http.StatusOK {
+		t.Fatalf("owner board API: got %d (%s), want 200", res.Code, res.Body.String())
 	}
 }
 
-// US9: private-group members can view the member list
-func TestPrivateGroupMembersCanViewMembers(t *testing.T) {
+func TestGroupOwnershipTransfer(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
+	owner, member, outsider := newUser(t, db), newUser(t, db), newUser(t, db)
+	groupID, _ := mustCreateGroup(t, db, owner, unique("transfer"), false)
+	mustJoinGroup(t, db, member, groupID, "")
 
-	ownerID := newUser(t, db)
-	memberID := newUser(t, db)
-
-	groupID, code, err := CreateGroup(ctx, db, ownerID, unique("private-members"), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = JoinGroup(ctx, db, memberID, groupID, code)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	members, err := GetGroupMembers(ctx, db, memberID, groupID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(members) != 2 {
-		t.Fatalf("expected 2 members, got %d", len(members))
-	}
-
-	ownerFound := false
-	memberFound := false
-
-	for _, member := range members {
-		if member.UserID == ownerID {
-			ownerFound = true
-			if !member.IsOwner {
-				t.Fatal("owner should be marked as owner")
-			}
-		}
-
-		if member.UserID == memberID {
-			memberFound = true
-			if member.IsOwner {
-				t.Fatal("regular member should not be marked as owner")
-			}
+	for _, tc := range []struct {
+		actor, target int64
+		want          error
+	}{
+		{member, member, ErrNotGroupOwner},
+		{owner, outsider, ErrNotGroupMember},
+		{owner, owner, ErrAlreadyGroupOwner},
+	} {
+		if err := TransferGroupOwnership(ctx, db, tc.actor, groupID, tc.target); !errors.Is(err, tc.want) {
+			t.Fatalf("transfer(%d -> %d): got %v, want %v", tc.actor, tc.target, err, tc.want)
 		}
 	}
+	assertGroupOwner(t, db, groupID, owner)
 
-	if !ownerFound || !memberFound {
-		t.Fatal("member list should contain the owner and joined member")
-	}
-}
-
-// US9: outsiders cannot view a private group's members.
-func TestOutsiderCannotViewPrivateGroupMembers(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-
-	ownerID := newUser(t, db)
-	outsiderID := newUser(t, db)
-
-	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("private-access"), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	members, err := GetGroupMembers(ctx, db, outsiderID, groupID)
-	if !errors.Is(err, ErrPrivateGroupAccess) {
-		t.Fatalf("expected ErrPrivateGroupAccess, got %v", err)
-	}
-
-	if len(members) != 0 {
-		t.Fatal("outsider should not receive private member information")
-	}
-}
-
-// US9: a signed-in outsider can view a public group's members.
-func TestPublicGroupMembersAreVisible(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-
-	ownerID := newUser(t, db)
-	outsiderID := newUser(t, db)
-
-	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("public-members"), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	members, err := GetGroupMembers(ctx, db, outsiderID, groupID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(members) != 1 || members[0].UserID != ownerID || !members[0].IsOwner {
-		t.Fatal("expected the group's owner in the member list")
-	}
-}
-
-func TestGroupMembersAPI(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-
-	ownerID := newUser(t, db)
-	outsiderID := newUser(t, db)
-
-	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("members-api"), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	originalCurrentUser := currentUser
-	t.Cleanup(func() {
-		currentUser = originalCurrentUser
-	})
-
-	path := fmt.Sprintf("/groups/%d/members", groupID)
 	handler := routes(db)
-
-	// A signed-out user should receive 401.
-	currentUser = func(r *http.Request) (int64, error) {
-		return 0, errNotSignedIn
-	}
-
-	request := httptest.NewRequest(http.MethodGet, path, nil)
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", response.Code)
-	}
-
-	// A signed-in outsider should receive 403.
-	currentUser = func(r *http.Request) (int64, error) {
-		return outsiderID, nil
-	}
-
-	request = httptest.NewRequest(http.MethodGet, path, nil)
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", response.Code)
-	}
-
-	// The owner should receive the member list.
-	currentUser = func(r *http.Request) (int64, error) {
-		return ownerID, nil
-	}
-
-	request = httptest.NewRequest(http.MethodGet, path, nil)
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
-	}
-
-	var members []GroupMember
-	err = json.Unmarshal(response.Body.Bytes(), &members)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(members) != 1 || members[0].UserID != ownerID || !members[0].IsOwner {
-		t.Fatal("expected the owner in the returned member list")
-	}
-}
-
-func TestPrivateGroupLeaderboardAPI(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-
-	ownerID := newUser(t, db)
-	outsiderID := newUser(t, db)
-
-	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("private-board"), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	originalCurrentUser := currentUser
-	t.Cleanup(func() {
-		currentUser = originalCurrentUser
-	})
-
-	path := fmt.Sprintf("/groups/%d/leaderboard", groupID)
-	handler := routes(db)
-
-	currentUser = func(r *http.Request) (int64, error) {
-		return outsiderID, nil
-	}
-
-	request := httptest.NewRequest(http.MethodGet, path, nil)
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", response.Code)
-	}
-
-	currentUser = func(r *http.Request) (int64, error) {
-		return ownerID, nil
-	}
-
-	request = httptest.NewRequest(http.MethodGet, path, nil)
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
-	}
-}
-
-// US9: the owner can transfer ownership to a member and then leave.
-func TestTransferGroupOwnership(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-
-	ownerID := newUser(t, db)
-	memberID := newUser(t, db)
-
-	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("transfer"), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = JoinGroup(ctx, db, memberID, groupID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = TransferGroupOwnership(ctx, db, ownerID, groupID, memberID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var savedOwnerID int64
-	err = db.QueryRowContext(ctx,
-		"SELECT owner_id FROM user_groups WHERE id = $1",
-		groupID,
-	).Scan(&savedOwnerID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if savedOwnerID != memberID {
-		t.Fatal("ownership should belong to the new owner")
-	}
-
-	// The previous owner can now leave.
-	err = LeaveGroup(ctx, db, ownerID, groupID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// The new owner cannot leave without transferring ownership.
-	err = LeaveGroup(ctx, db, memberID, groupID)
-	if !errors.Is(err, ErrGroupOwnerCannotLeave) {
-		t.Fatalf("expected ErrGroupOwnerCannotLeave, got %v", err)
-	}
-}
-
-// US9: only the owner can transfer ownership, and the recipient must be a member.
-func TestInvalidOwnershipTransfers(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-
-	ownerID := newUser(t, db)
-	memberID := newUser(t, db)
-	outsiderID := newUser(t, db)
-
-	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("transfer-errors"), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = JoinGroup(ctx, db, memberID, groupID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// A regular member cannot transfer ownership.
-	err = TransferGroupOwnership(ctx, db, memberID, groupID, memberID)
-	if !errors.Is(err, ErrNotGroupOwner) {
-		t.Fatalf("expected ErrNotGroupOwner, got %v", err)
-	}
-
-	// The owner cannot transfer ownership to an outsider.
-	err = TransferGroupOwnership(ctx, db, ownerID, groupID, outsiderID)
-	if !errors.Is(err, ErrNotGroupMember) {
-		t.Fatalf("expected ErrNotGroupMember, got %v", err)
-	}
-
-	// The owner cannot transfer ownership to themselves.
-	err = TransferGroupOwnership(ctx, db, ownerID, groupID, ownerID)
-	if !errors.Is(err, ErrAlreadyGroupOwner) {
-		t.Fatalf("expected ErrAlreadyGroupOwner, got %v", err)
-	}
-
-	// Rejected transfers must not change the owner.
-	var savedOwnerID int64
-	err = db.QueryRowContext(ctx,
-		"SELECT owner_id FROM user_groups WHERE id = $1",
-		groupID,
-	).Scan(&savedOwnerID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if savedOwnerID != ownerID {
-		t.Fatal("rejected transfers should not change ownership")
-	}
-}
-
-func TestTransferGroupOwnershipAPI(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-
-	ownerID := newUser(t, db)
-	memberID := newUser(t, db)
-
-	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("transfer-api"), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = JoinGroup(ctx, db, memberID, groupID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	originalCurrentUser := currentUser
-	t.Cleanup(func() {
-		currentUser = originalCurrentUser
-	})
-
 	path := fmt.Sprintf("/groups/%d/owner", groupID)
-	body := fmt.Sprintf(`{"user_id":%d}`, memberID)
+	body := fmt.Sprintf(`{"user_id":%d}`, member)
+
+	signInAs(t, member)
+	if res := doReq(handler, http.MethodPost, path, body); res.Code != http.StatusForbidden {
+		t.Fatalf("member transfer API: got %d, want 403", res.Code)
+	}
+	assertGroupOwner(t, db, groupID, owner)
+
+	signInAs(t, owner)
+	if res := doReq(handler, http.MethodPost, path, body); res.Code != http.StatusNoContent {
+		t.Fatalf("owner transfer API: got %d (%s), want 204", res.Code, res.Body.String())
+	}
+	assertGroupOwner(t, db, groupID, member)
+
+	if err := LeaveGroup(ctx, db, owner, groupID); err != nil {
+		t.Fatalf("former owner leave: %v", err)
+	}
+	if err := LeaveGroup(ctx, db, member, groupID); !errors.Is(err, ErrGroupOwnerCannotLeave) {
+		t.Fatalf("new owner leave: got %v, want ErrGroupOwnerCannotLeave", err)
+	}
+}
+
+func TestGroupDeletion(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	owner, member := newUser(t, db), newUser(t, db)
+	groupID, code := mustCreateGroup(t, db, owner, unique("delete"), true)
+	mustJoinGroup(t, db, member, groupID, code)
+
+	if err := DeleteGroup(ctx, db, member, groupID); !errors.Is(err, ErrNotGroupOwner) {
+		t.Fatalf("member delete: got %v, want ErrNotGroupOwner", err)
+	}
+	assertGroupCounts(t, db, groupID, 1, 2, 1)
+
 	handler := routes(db)
-
-	// A regular member cannot make themselves the owner.
-	currentUser = func(r *http.Request) (int64, error) {
-		return memberID, nil
-	}
-
-	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", response.Code)
-	}
-
-	var savedOwnerID int64
-	err = db.QueryRowContext(ctx,
-		"SELECT owner_id FROM user_groups WHERE id = $1",
-		groupID,
-	).Scan(&savedOwnerID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if savedOwnerID != ownerID {
-		t.Fatal("rejected request should not change ownership")
-	}
-
-	// The current owner can transfer ownership.
-	currentUser = func(r *http.Request) (int64, error) {
-		return ownerID, nil
-	}
-
-	request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d: %s", response.Code, response.Body.String())
-	}
-
-	err = db.QueryRowContext(ctx,
-		"SELECT owner_id FROM user_groups WHERE id = $1",
-		groupID,
-	).Scan(&savedOwnerID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if savedOwnerID != memberID {
-		t.Fatal("successful request should change ownership")
-	}
-}
-
-// US9: the owner can delete a group, including its memberships and invites.
-func TestOwnerCanDeleteGroup(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-
-	ownerID := newUser(t, db)
-	memberID := newUser(t, db)
-
-	groupID, code, err := CreateGroup(ctx, db, ownerID, unique("delete"), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = JoinGroup(ctx, db, memberID, groupID, code)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = DeleteGroup(ctx, db, ownerID, groupID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var groups, members, invites int
-	err = db.QueryRowContext(ctx,
-		"SELECT (SELECT COUNT(*) FROM user_groups WHERE id = $1), (SELECT COUNT(*) FROM group_members WHERE group_id = $1), (SELECT COUNT(*) FROM group_invites WHERE group_id = $1)",
-		groupID,
-	).Scan(&groups, &members, &invites)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if groups != 0 || members != 0 || invites != 0 {
-		t.Fatal("group, memberships, and invites should all be deleted")
-	}
-
-	// Deleting the group must not delete its users.
-	var users int
-	err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM users WHERE id IN ($1, $2)",
-		ownerID, memberID,
-	).Scan(&users)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if users != 2 {
-		t.Fatal("deleting a group should preserve its users")
-	}
-
-	err = DeleteGroup(ctx, db, ownerID, groupID)
-	if !errors.Is(err, ErrNoSuchGroup) {
-		t.Fatalf("expected ErrNoSuchGroup, got %v", err)
-	}
-}
-
-// US9: a regular member cannot delete a group.
-func TestMemberCannotDeleteGroup(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-
-	ownerID := newUser(t, db)
-	memberID := newUser(t, db)
-
-	groupID, code, err := CreateGroup(ctx, db, ownerID, unique("delete-denied"), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = JoinGroup(ctx, db, memberID, groupID, code)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = DeleteGroup(ctx, db, memberID, groupID)
-	if !errors.Is(err, ErrNotGroupOwner) {
-		t.Fatalf("expected ErrNotGroupOwner, got %v", err)
-	}
-
-	// The rejected deletion must preserve the group and its related data.
-	var groups, members, invites int
-	err = db.QueryRowContext(ctx,
-		"SELECT (SELECT COUNT(*) FROM user_groups WHERE id = $1), (SELECT COUNT(*) FROM group_members WHERE group_id = $1), (SELECT COUNT(*) FROM group_invites WHERE group_id = $1)",
-		groupID,
-	).Scan(&groups, &members, &invites)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if groups != 1 || members != 2 || invites != 1 {
-		t.Fatal("rejected deletion should preserve the group, members, and invite")
-	}
-}
-
-func TestDeleteGroupAPI(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-
-	ownerID := newUser(t, db)
-	memberID := newUser(t, db)
-
-	groupID, _, err := CreateGroup(ctx, db, ownerID, unique("delete-api"), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = JoinGroup(ctx, db, memberID, groupID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	originalCurrentUser := currentUser
-	t.Cleanup(func() {
-		currentUser = originalCurrentUser
-	})
-
 	path := fmt.Sprintf("/groups/%d", groupID)
-	handler := routes(db)
 
-	// A signed-out user cannot delete the group.
-	currentUser = func(r *http.Request) (int64, error) {
-		return 0, errNotSignedIn
+	signOutForTest(t)
+	if res := doReq(handler, http.MethodDelete, path, ""); res.Code != http.StatusUnauthorized {
+		t.Fatalf("signed-out delete API: got %d, want 401", res.Code)
 	}
-
-	request := httptest.NewRequest(http.MethodDelete, path, nil)
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", response.Code)
+	signInAs(t, member)
+	if res := doReq(handler, http.MethodDelete, path, ""); res.Code != http.StatusForbidden {
+		t.Fatalf("member delete API: got %d, want 403", res.Code)
 	}
+	assertGroupCounts(t, db, groupID, 1, 2, 1)
 
-	// A regular member cannot delete the group.
-	currentUser = func(r *http.Request) (int64, error) {
-		return memberID, nil
+	signInAs(t, owner)
+	if res := doReq(handler, http.MethodDelete, path, ""); res.Code != http.StatusNoContent {
+		t.Fatalf("owner delete API: got %d (%s), want 204", res.Code, res.Body.String())
 	}
+	assertGroupCounts(t, db, groupID, 0, 0, 0)
 
-	request = httptest.NewRequest(http.MethodDelete, path, nil)
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", response.Code)
+	var users int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM users WHERE id IN ($1, $2)`, owner, member).Scan(&users); err != nil || users != 2 {
+		t.Fatalf("users after delete = %d (%v), want 2", users, err)
 	}
-
-	// Rejected requests must leave the group intact.
-	var count int
-	err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM user_groups WHERE id = $1",
-		groupID,
-	).Scan(&count)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if count != 1 {
-		t.Fatal("rejected requests should not delete the group")
-	}
-
-	// The owner can delete the group.
-	currentUser = func(r *http.Request) (int64, error) {
-		return ownerID, nil
-	}
-
-	request = httptest.NewRequest(http.MethodDelete, path, nil)
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d: %s", response.Code, response.Body.String())
-	}
-
-	err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM user_groups WHERE id = $1",
-		groupID,
-	).Scan(&count)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if count != 0 {
-		t.Fatal("owner's request should delete the group")
+	if err := DeleteGroup(ctx, db, owner, groupID); !errors.Is(err, ErrNoSuchGroup) {
+		t.Fatalf("delete again: got %v, want ErrNoSuchGroup", err)
 	}
 }
 
-// US9: public-group search ignores capitalization and excludes private groups.
-func TestSearchPublicGroups(t *testing.T) {
+func TestSearchAndPublicGroupsAPI(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
-	ownerID := newUser(t, db)
+	owner := newUser(t, db)
 	search := unique("search")
 
-	publicID, _, err := CreateGroup(ctx, db, ownerID, search+" Music Fans", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, _, err = CreateGroup(ctx, db, ownerID, search+" Private Fans", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, _, err = CreateGroup(ctx, db, ownerID, unique("unrelated"), false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pubID, _ := mustCreateGroup(t, db, owner, search+" Music Fans", false)
+	mustCreateGroup(t, db, owner, search+" Private Fans", true)
+	mustCreateGroup(t, db, owner, unique("unrelated"), false)
 
 	groups, err := GetPublicGroups(ctx, db, strings.ToUpper(search))
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || len(groups) != 1 || groups[0].ID != pubID || groups[0].Members != 1 {
+		t.Fatalf("GetPublicGroups = %+v (%v), want 1 public group %d with 1 member", groups, err, pubID)
 	}
 
-	if len(groups) != 1 {
-		t.Fatalf("expected 1 matching public group, got %d", len(groups))
-	}
-
-	if groups[0].ID != publicID {
-		t.Fatal("search returned the wrong group")
-	}
-
-	if groups[0].Members != 1 {
-		t.Fatal("the owner should count as one member")
-	}
-}
-
-func TestPublicGroupsAPI(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	ownerID := newUser(t, db)
-	search := unique("browse")
-
-	publicID, _, err := CreateGroup(ctx, db, ownerID, search+" Public", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, _, err = CreateGroup(ctx, db, ownerID, search+" Private", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	originalCurrentUser := currentUser
-	t.Cleanup(func() {
-		currentUser = originalCurrentUser
-	})
-
-	path := "/groups?search=" + search
 	handler := routes(db)
+	path := "/groups?search=" + search
 
-	// Signed-out requests must be rejected.
-	currentUser = func(r *http.Request) (int64, error) {
-		return 0, errNotSignedIn
+	signOutForTest(t)
+	if res := doReq(handler, http.MethodGet, path, ""); res.Code != http.StatusUnauthorized {
+		t.Fatalf("signed-out public groups API: got %d, want 401", res.Code)
 	}
 
-	request := httptest.NewRequest(http.MethodGet, path, nil)
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", response.Code)
+	signInAs(t, owner)
+	res := doReq(handler, http.MethodGet, path, "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("public groups API: got %d (%s), want 200", res.Code, res.Body.String())
 	}
-
-	// Signed-in users should receive only matching public groups.
-	currentUser = func(r *http.Request) (int64, error) {
-		return ownerID, nil
-	}
-
-	request = httptest.NewRequest(http.MethodGet, path, nil)
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
-	}
-
-	var groups []Group
-	err = json.Unmarshal(response.Body.Bytes(), &groups)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(groups) != 1 || groups[0].ID != publicID {
-		t.Fatal("response should contain only the matching public group")
+	var got []Group
+	if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil || len(got) != 1 || got[0].ID != pubID {
+		t.Fatalf("public groups payload = %s (%v), want group %d", res.Body.String(), err, pubID)
 	}
 }

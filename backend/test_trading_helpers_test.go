@@ -7,6 +7,28 @@ import (
 	"testing"
 )
 
+func submitTestOrder(t *testing.T, db *sql.DB, order Order) Order {
+	t.Helper()
+	result, err := PlaceOrder(context.Background(), db, order)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func mustOrder(t *testing.T, db *sql.DB, userID, marketID int64, side, action string, price, qty int64) Order {
+	t.Helper()
+	return submitTestOrder(t, db, Order{
+		UserID:    userID,
+		MarketID:  marketID,
+		RequestID: unique(action),
+		Side:      side,
+		Action:    action,
+		Price:     price,
+		Quantity:  qty,
+	})
+}
+
 func buyForTest(t *testing.T, ctx context.Context, db *sql.DB, userID, marketID int64, side string, quantity int64) (int64, error) {
 	t.Helper()
 	order := Order{

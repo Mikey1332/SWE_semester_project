@@ -46,7 +46,9 @@ func findMatchingOrder(ctx context.Context, tx *sql.Tx, order Order) (Order, err
 		if err != nil {
 			return Order{}, err
 		}
-
+		if order.countertrade && (otherOrder.Price < botMinPrice || otherOrder.Price > botMaxPrice) {
+			continue
+		}
 		action, price := otherOrder.quoteForSide(order.Side)
 		if action == order.Action {
 			continue
@@ -87,29 +89,6 @@ func findMatchingOrder(ctx context.Context, tx *sql.Tx, order Order) (Order, err
 }
 
 func fillOrder(ctx context.Context, tx *sql.Tx, order Order, quantity int64, price int64) error {
-	if quantity <= 0 || quantity > 1000000 {
-		return ErrLimitOrder
-	}
-	if price < 1 || price > 99 {
-		return ErrLimitOrder
-	}
-
-	if order.Action != "buy" && order.Action != "sell" {
-		return ErrLimitOrder
-	}
-
-	if order.Side != "yes" && order.Side != "no" {
-		return ErrLimitOrder
-	}
-
-	if order.Action == "buy" && price > order.Price {
-		return ErrLimitOrder
-	}
-
-	if order.Action == "sell" && price < order.Price {
-		return ErrLimitOrder
-	}
-
 	var id int64
 
 	err := tx.QueryRowContext(ctx, `
@@ -118,21 +97,8 @@ func fillOrder(ctx context.Context, tx *sql.Tx, order Order, quantity int64, pri
 		WHERE id = $1
 		  AND remaining >= $2
 		  AND cancelled = false
-		  AND user_id = $3
-		  AND market_id = $4
-		  AND side = $5
-		  AND action = $6
-		  AND price = $7
 		RETURNING id
-	`,
-		order.ID,
-		quantity,
-		order.UserID,
-		order.MarketID,
-		order.Side,
-		order.Action,
-		order.Price,
-	).Scan(&id)
+	`, order.ID, quantity).Scan(&id)
 
 	if err != nil {
 		return err

@@ -140,7 +140,7 @@ func TestRunBotTickRecoversAndLogsPanic(t *testing.T) {
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(previous) })
 
-	runBotTick(context.Background(), nil)
+	runBotTick(context.Background(), nil, 0)
 
 	output := logs.String()
 	if !strings.Contains(output, "bots: panic:") ||

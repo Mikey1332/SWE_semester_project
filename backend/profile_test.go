@@ -6,136 +6,49 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 )
 
 func TestProfilePositionsPnLAndWinLoss(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
-	user := newUser(t, db)
-	otherUser := newUser(t, db)
+	user, otherUser := newUser(t, db), newUser(t, db)
 
-	base := uniqueDate()
-	week1 := base.AddDate(0, 0, 7).Format(time.DateOnly)
-	week2 := base.AddDate(0, 0, 14).Format(time.DateOnly)
-	week3 := base.AddDate(0, 0, 21).Format(time.DateOnly)
+	openMarket, _, _ := newMarket(t, db, 15, 1, 65)
+	mustOrder(t, db, otherUser, openMarket, "no", "buy", 60, 10)
+	mustOrder(t, db, user, openMarket, "yes", "buy", 40, 10)
+	mustOrder(t, db, user, openMarket, "yes", "buy", 30, 5)
 
-	openSong := newSong(t, db)
-	var openMarket int64
-	err := db.QueryRowContext(ctx, `
-		INSERT INTO markets (song_id, chart_date, baseline_rank, shift, yes_price, closes_at)
-		VALUES ($1, $2, 15, 1, 65, now() + interval '2 days')
-		RETURNING id
-	`, openSong, week1).Scan(&openMarket)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = PlaceOrder(ctx, db, Order{
-		UserID:    otherUser,
-		MarketID:  openMarket,
-		RequestID: unique("m1-no"),
-		Side:      "no",
-		Action:    "buy",
-		Price:     60,
-		Quantity:  10,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = PlaceOrder(ctx, db, Order{
-		UserID:    user,
-		MarketID:  openMarket,
-		RequestID: unique("m1-yes"),
-		Side:      "yes",
-		Action:    "buy",
-		Price:     40,
-		Quantity:  10,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = PlaceOrder(ctx, db, Order{
-		UserID:    user,
-		MarketID:  openMarket,
-		RequestID: unique("m1-resting"),
-		Side:      "yes",
-		Action:    "buy",
-		Price:     30,
-		Quantity:  5,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	winSong := newSong(t, db)
-	var winMarket int64
-	err = db.QueryRowContext(ctx, `
-		INSERT INTO markets (song_id, chart_date, baseline_rank, shift, yes_price, closes_at)
-		VALUES ($1, $2, 20, 1, 60, now() + interval '1 hour')
-		RETURNING id
-	`, winSong, week2).Scan(&winMarket)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = buyForTest(t, ctx, db, user, winMarket, "yes", 10)
-	if err != nil {
+	winMarket, winSong, week2 := newMarket(t, db, 20, 1, 60)
+	if _, err := buyForTest(t, ctx, db, user, winMarket, "yes", 10); err != nil {
 		t.Fatal(err)
 	}
 	addRank(t, db, winSong, week2, 10)
 	fillChart(t, db, week2)
-	err = Resolve(ctx, db, winMarket)
-	if err != nil {
+	if err := Resolve(ctx, db, winMarket); err != nil {
 		t.Fatal(err)
 	}
 
-	loseSong := newSong(t, db)
-	var loseMarket int64
-	err = db.QueryRowContext(ctx, `
-		INSERT INTO markets (song_id, chart_date, baseline_rank, shift, yes_price, closes_at)
-		VALUES ($1, $2, 10, 1, 50, now() + interval '1 hour')
-		RETURNING id
-	`, loseSong, week3).Scan(&loseMarket)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = buyForTest(t, ctx, db, user, loseMarket, "yes", 5)
-	if err != nil {
+	loseMarket, loseSong, week3 := newMarket(t, db, 10, 1, 50)
+	if _, err := buyForTest(t, ctx, db, user, loseMarket, "yes", 5); err != nil {
 		t.Fatal(err)
 	}
 	addRank(t, db, loseSong, week3, 25)
 	fillChart(t, db, week3)
-	err = Resolve(ctx, db, loseMarket)
-	if err != nil {
+	if err := Resolve(ctx, db, loseMarket); err != nil {
 		t.Fatal(err)
 	}
 
-	oldUser := currentUser
-	currentUser = func(*http.Request) (int64, error) {
-		return user, nil
-	}
-	defer func() {
-		currentUser = oldUser
-	}()
-
-	req := httptest.NewRequest(http.MethodGet, "/me/profile", nil)
+	signInAs(t, user)
 	rec := httptest.NewRecorder()
-	routes(db).ServeHTTP(rec, req)
-
+	routes(db).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/me/profile", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /me/profile status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 
 	var got Profile
-	err = json.NewDecoder(rec.Body).Decode(&got)
-	if err != nil {
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-
 	if got.Balance != 9750 {
 		t.Fatalf("Balance = %d, want 9750", got.Balance)
 	}

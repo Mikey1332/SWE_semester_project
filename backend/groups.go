@@ -75,8 +75,6 @@ func MyGroups(ctx context.Context, db *sql.DB, userID int64) ([]Group, error) {
 
 func CreateGroup(ctx context.Context, db *sql.DB, userID int64, name string, isPrivate bool) (int64, string, error) {
 	var code string
-
-	// Only private groups need invitation codes.
 	if isPrivate {
 		var err error
 		code, err = generateInviteCode()
@@ -91,7 +89,6 @@ func CreateGroup(ctx context.Context, db *sql.DB, userID int64, name string, isP
 	}
 	defer tx.Rollback()
 
-	// Create the group with its owner and privacy setting.
 	var groupID int64
 
 	query := "INSERT INTO user_groups (name, owner_id, is_private) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING RETURNING id"
@@ -104,14 +101,12 @@ func CreateGroup(ctx context.Context, db *sql.DB, userID int64, name string, isP
 		return 0, "", err
 	}
 
-	// Add the creator as a member.
 	query = "INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)"
 	_, err = tx.ExecContext(ctx, query, groupID, userID)
 	if err != nil {
 		return 0, "", err
 	}
 
-	// Save an invitation code for private groups.
 	if isPrivate {
 		query = "INSERT INTO group_invites (code, group_id) VALUES ($1, $2)"
 		_, err = tx.ExecContext(ctx, query, code, groupID)
@@ -135,7 +130,6 @@ func JoinGroup(ctx context.Context, db *sql.DB, userID, groupID int64, code stri
 	}
 	defer tx.Rollback()
 
-	// Check whether the group exists and is private.
 	var isPrivate bool
 
 	query := "SELECT is_private FROM user_groups WHERE id = $1 FOR SHARE"
@@ -148,7 +142,6 @@ func JoinGroup(ctx context.Context, db *sql.DB, userID, groupID int64, code stri
 		return err
 	}
 
-	// Private groups require an invitation for this specific group.
 	if isPrivate {
 		if code == "" {
 			return ErrInviteRequired
@@ -167,7 +160,6 @@ func JoinGroup(ctx context.Context, db *sql.DB, userID, groupID int64, code stri
 		}
 	}
 
-	// Add the user unless they already belong to the group.
 	query = "INSERT INTO group_members (group_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING"
 	result, err := tx.ExecContext(ctx, query, groupID, userID)
 	if err != nil {
@@ -193,7 +185,6 @@ func LeaveGroup(ctx context.Context, db *sql.DB, userID, groupID int64) error {
 	}
 	defer tx.Rollback()
 
-	// Lock the group while checking ownership and removing membership.
 	var ownerID sql.NullInt64
 
 	query := "SELECT owner_id FROM user_groups WHERE id = $1 FOR UPDATE"
@@ -246,7 +237,6 @@ func RemoveGroupMember(ctx context.Context, db *sql.DB, userID, groupID, memberI
 	}
 	defer tx.Rollback()
 
-	// Lock the group so ownership cannot change during removal.
 	var ownerID sql.NullInt64
 
 	query := "SELECT owner_id FROM user_groups WHERE id = $1 FOR UPDATE"
@@ -304,7 +294,6 @@ func GetGroupMembers(ctx context.Context, db *sql.DB, userID, groupID int64) ([]
 		return nil, err
 	}
 
-	// Only members can view a private group's members.
 	if isPrivate {
 		var isMember bool
 
@@ -360,7 +349,6 @@ func TransferGroupOwnership(ctx context.Context, db *sql.DB, userID, groupID, ne
 	}
 	defer tx.Rollback()
 
-	// Lock the group while changing ownership.
 	var ownerID sql.NullInt64
 
 	query := "SELECT owner_id FROM user_groups WHERE id = $1 FOR UPDATE"
@@ -373,7 +361,6 @@ func TransferGroupOwnership(ctx context.Context, db *sql.DB, userID, groupID, ne
 		return err
 	}
 
-	// Only the current owner can transfer ownership.
 	if !ownerID.Valid || ownerID.Int64 != userID {
 		return ErrNotGroupOwner
 	}
@@ -382,7 +369,6 @@ func TransferGroupOwnership(ctx context.Context, db *sql.DB, userID, groupID, ne
 		return ErrAlreadyGroupOwner
 	}
 
-	// The new owner must already belong to the group.
 	var isMember bool
 
 	query = "SELECT EXISTS (SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2)"
@@ -411,7 +397,6 @@ func DeleteGroup(ctx context.Context, db *sql.DB, userID, groupID int64) error {
 	}
 	defer tx.Rollback()
 
-	// Lock the group while checking ownership and deleting it.
 	var ownerID sql.NullInt64
 
 	query := "SELECT owner_id FROM user_groups WHERE id = $1 FOR UPDATE"
@@ -428,15 +413,7 @@ func DeleteGroup(ctx context.Context, db *sql.DB, userID, groupID int64) error {
 		return ErrNotGroupOwner
 	}
 
-	// Remove memberships before deleting the group.
 	query = "DELETE FROM group_members WHERE group_id = $1"
-	_, err = tx.ExecContext(ctx, query, groupID)
-	if err != nil {
-		return err
-	}
-
-	// Remove the group's invitation codes.
-	query = "DELETE FROM group_invites WHERE group_id = $1"
 	_, err = tx.ExecContext(ctx, query, groupID)
 	if err != nil {
 		return err

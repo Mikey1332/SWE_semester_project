@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -34,18 +33,9 @@ func orderHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		Price     int64  `json:"price"`
 		Quantity  int64  `json:"quantity"`
 	}
-	body := http.MaxBytesReader(w, r.Body, 2048)
-	decoder := json.NewDecoder(body)
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&request)
+	err = json.NewDecoder(r.Body).Decode(&request)
 	if err != nil {
 		http.Error(w, "invalid order JSON", http.StatusBadRequest)
-		return
-	}
-	var extra any
-	err = decoder.Decode(&extra)
-	if err != io.EOF {
-		http.Error(w, "send one JSON object", http.StatusBadRequest)
 		return
 	}
 
@@ -160,12 +150,14 @@ func cancelOrder(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	tx, err := db.BeginTx(r.Context(), nil)
 	if err != nil {
+		log.Printf("cancel order: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	defer tx.Rollback()
 	_, err = tx.ExecContext(r.Context(), `SELECT pg_advisory_xact_lock(3031)`)
 	if err != nil {
+		log.Printf("cancel order: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -185,6 +177,7 @@ func cancelOrder(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	err = tx.Commit()
 	if err != nil {
+		log.Printf("cancel order: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

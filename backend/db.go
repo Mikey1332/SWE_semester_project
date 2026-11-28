@@ -1,11 +1,11 @@
 package main
 
 import (
-	"fmt"
 	"context"
 	"database/sql"
 	"embed"
 	"errors"
+	"fmt"
 	"io/fs"
 	"path"
 
@@ -134,11 +134,11 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 		return fmt.Errorf("take settlement lock: %w", err)
 	}
 
-	var songID, baseline, shift int64
+	var songID, baseline int64
 	var chartDate, status string
 	err = tx.QueryRowContext(ctx,
-		`SELECT song_id, chart_date::text, baseline_rank, shift, status
-		 FROM markets WHERE id = $1 FOR UPDATE`, marketID).Scan(&songID, &chartDate, &baseline, &shift, &status)
+		`SELECT song_id, chart_date::text, baseline_rank, status
+		 FROM markets WHERE id = $1 FOR UPDATE`, marketID).Scan(&songID, &chartDate, &baseline, &status)
 	if err != nil {
 		return fmt.Errorf("load market: %w", err)
 	}
@@ -193,7 +193,7 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 		err = rows.Scan(&holder.userID, &holder.side, &holder.quantity, &holder.remainingCost)
 		if err != nil {
 			rows.Close()
-			return fmt.Errorf("read positions: %w", rows.Err())
+			return fmt.Errorf("read positions: %w", err)
 		}
 		payments = append(payments, holder)
 	}
@@ -243,20 +243,28 @@ func Resolve(ctx context.Context, db *sql.DB, marketID int64) error {
 // still create one user and one grant: the loser's insert waits on the unique
 // firebase_uid, then finds the winner's row.
 func UserForFirebase(ctx context.Context, db *sql.DB, firebaseUID, email string) (int64, error) {
+	var id int64
+	err := db.QueryRowContext(ctx, `SELECT id FROM users WHERE firebase_uid = $1`, firebaseUID).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
 
-	var id int64
 	err = tx.QueryRowContext(ctx,
 		`INSERT INTO users (firebase_uid, email) VALUES ($1, NULLIF($2, ''))
 		 ON CONFLICT (firebase_uid) DO NOTHING
 		 RETURNING id`,
 		firebaseUID, email).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) { // signed in before
-		err = db.QueryRowContext(ctx, `SELECT id FROM users WHERE firebase_uid = $1`, firebaseUID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = tx.QueryRowContext(ctx, `SELECT id FROM users WHERE firebase_uid = $1`, firebaseUID).Scan(&id)
 		return id, err
 	}
 	if err != nil {

@@ -89,14 +89,14 @@ func PlaceOrder(ctx context.Context, db *sql.DB, order Order) (Order, error) {
 		return Order{}, err
 	}
 
-	var marketID int64
+	var open bool
 
 	err = tx.QueryRowContext(ctx, `
-	SELECT id
+		SELECT status = 'open' AND clock_timestamp() < closes_at
 		FROM markets
 		WHERE id = $1
 		FOR UPDATE
-	`, order.MarketID).Scan(&marketID)
+	`, order.MarketID).Scan(&open)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return Order{}, ErrMarketClosed
@@ -121,36 +121,16 @@ func PlaceOrder(ctx context.Context, db *sql.DB, order Order) (Order, error) {
 	existingOrder, err := findOrder(ctx, tx, order.UserID, order.RequestID)
 
 	if err == nil {
-		if existingOrder.MarketID != order.MarketID {
-			return Order{}, ErrRequestConflict
-		}
-		if existingOrder.Side != order.Side {
-			return Order{}, ErrRequestConflict
-		}
-		if existingOrder.Action != order.Action {
-			return Order{}, ErrRequestConflict
-		}
-		if existingOrder.Price != order.Price {
-			return Order{}, ErrRequestConflict
-		}
-		if existingOrder.Quantity != order.Quantity {
+		if existingOrder.MarketID != order.MarketID ||
+			existingOrder.Side != order.Side ||
+			existingOrder.Action != order.Action ||
+			existingOrder.Price != order.Price ||
+			existingOrder.Quantity != order.Quantity {
 			return Order{}, ErrRequestConflict
 		}
 		return existingOrder, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return Order{}, err
-	}
-
-	var open bool
-
-	err = tx.QueryRowContext(ctx, `
-	SELECT status = 'open' AND clock_timestamp() < closes_at
-		FROM markets
-		WHERE id = $1
-	`, order.MarketID).Scan(&open)
-
-	if err != nil {
 		return Order{}, err
 	}
 
@@ -231,10 +211,7 @@ func PlaceOrder(ctx context.Context, db *sql.DB, order Order) (Order, error) {
 			return Order{}, err
 		}
 
-		quantity := order.Remaining
-		if match.Remaining < quantity {
-			quantity = match.Remaining
-		}
+		quantity := min(order.Remaining, match.Remaining)
 
 		_, price := match.quoteForSide(order.Side)
 

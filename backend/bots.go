@@ -158,10 +158,7 @@ func CreateMarkets(ctx context.Context, db *sql.DB, chartDate string) (int, erro
 // RunBots calls botTick every botInterval until ctx is cancelled.
 func RunBots(ctx context.Context, db *sql.DB, botUserID int64) {
 	for {
-		runBotTick(ctx, db)
-		if err := countertrade(ctx, db, botUserID); err != nil {
-			log.Printf("bots: countertrade error: %v", err)
-		}
+		runBotTick(ctx, db, botUserID)
 		select {
 		case <-ctx.Done():
 			return
@@ -170,8 +167,7 @@ func RunBots(ctx context.Context, db *sql.DB, botUserID int64) {
 	}
 }
 
-// runBotTick runs one tick and logs any failure. So one bad tick never stops bots or takes server down.
-func runBotTick(ctx context.Context, db *sql.DB) {
+func runBotTick(ctx context.Context, db *sql.DB, botUserID int64) {
 	defer func() {
 		if p := recover(); p != nil {
 			log.Printf("bots: panic: %v\n%s", p, debug.Stack())
@@ -179,6 +175,11 @@ func runBotTick(ctx context.Context, db *sql.DB) {
 	}()
 	if err := botTick(ctx, db); err != nil {
 		log.Printf("bots: %v", err)
+	}
+	if botUserID > 0 {
+		if err := countertrade(ctx, db, botUserID); err != nil {
+			log.Printf("bots: countertrade error: %v", err)
+		}
 	}
 }
 
